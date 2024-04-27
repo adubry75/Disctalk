@@ -1,0 +1,951 @@
+﻿using Mono.Options;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Reflection;
+using System.Security.Policy;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace Disctalk
+{
+
+    internal class Program
+    {
+
+        static public string textToSend = null;
+        static public string userId = null;
+        static public string channelId = "950297385559523344"; // Default to my private hiking discord #general channel
+        static public int messagesPerFetch = 100;
+        static public int totalMessageLimit = 100;
+        static public bool boolViewMessages = false;
+        static public bool boolViewServers = false;
+        static public bool boolViewChannels = false;
+        static public bool boolViewRoles = false;
+        static public bool boolViewEmojis = false;
+        static public bool boolViewStickers = false;
+        static public bool boolServerPreview = false;
+        static public string viewServerId = null;
+        static public string orderBy = "desc";
+        static public bool testMode = false;
+        static public bool debugMode = false;
+        static public string token = Environment.GetEnvironmentVariable("MY_DISCORD_TOKEN");
+
+        static public HttpClient httpClient = null;
+        static public HttpRequestMessage httpRequest = null;
+
+
+
+        static async Task Main(string[] args)
+        {
+            if (!parseArgs(args)) { return; }
+
+            if (textToSend != null)
+            {
+                await sendText();
+                return;
+            }
+
+            if (boolViewMessages)
+            {
+                await viewMessages(totalMessageLimit);
+                return;
+            }
+
+            if (boolViewServers)
+            {
+                await viewServers();
+                return;
+            }
+
+            if (boolViewChannels)
+            {
+                await viewChannels();
+                return;
+            }
+
+            if (userId != null)
+            {
+                await viewUserProfile(long.Parse(userId));
+                return;
+            }
+
+            if (viewServerId != null)
+            {
+                dynamic server = await getServer(viewServerId);
+                Console.WriteLine($"{server.Name}: {server.Description}");
+                if (boolServerPreview)
+                {
+                    Console.WriteLine($"{server.MemberCount} members, {server.PresenceCount} presence.");
+                }
+                else
+                {
+                    // Roles aren't available view Preview.
+                    if (boolViewRoles)
+                    {
+                        foreach (var role in server.Roles)
+                        {
+                            Console.WriteLine($"{role.Name}: {role.Description}");
+                        }
+                    }
+                }
+
+                // Emojis and Stickers are available in verbose and preview modes.
+                if (boolViewEmojis)
+                {
+                    foreach (var emoji in server.Emojis)
+                    {
+                        Console.WriteLine($"{emoji.Name}");
+                    }
+                }
+
+                if (boolViewStickers)
+                {
+                    foreach (var sticker in server.Stickers)
+                    {
+                        Console.WriteLine($"{sticker.Name}");
+                    }
+                }
+
+
+                return;
+            }
+
+        }
+
+        async static public Task<bool> viewUserProfile(long userId)
+        {
+            bool rv = false;
+
+
+
+
+            return (rv);
+        }
+
+        // NOT IMPLEMENTED YET!!
+        async static public Task<bool> getUser(string userId)
+        {
+            //    https://discord.com/api/v9/users/779830303065767987
+            // or https://discord.com/api/v9/guilds/374631527335723018/members/779830303065767987 for more info
+            // or https://discord.com/api/v9/users/779830303065767987/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=false
+            
+            string url = $"https://discord.com/api/v9/users/{userId}";
+
+            prepareClient(url, new HttpMethod("GET"));
+
+            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+
+            if (response.IsSuccessStatusCode)
+            {
+                string responseBody = await response.Content.ReadAsStringAsync();
+            }
+            else
+            {
+                Console.WriteLine($"Error getting user {userId}! {response.StatusCode} ({(int)response.StatusCode})");
+            }
+
+            return false;
+        }
+
+        async static public Task<dynamic> getServer(string guildId)
+        {
+            // https://discord.com/api/v9/guilds/374631527335723018
+            Server server = new Server();
+
+            string url = $"https://discord.com/api/v9/guilds/{guildId}" + (boolServerPreview ? "/preview" : "");
+
+            prepareClient(url, new HttpMethod("GET"));
+
+            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+
+            if (response.IsSuccessStatusCode)
+            {
+                string responseBody = await response.Content.ReadAsStringAsync();
+                if (boolServerPreview)
+                {
+                    return JsonConvert.DeserializeObject<ServerPreview>(responseBody);
+                }
+                else
+                {
+                    return JsonConvert.DeserializeObject<Server>(responseBody);
+                }
+            }
+            else
+            {
+                Console.WriteLine($"Error getting server {guildId}! {response.StatusCode} ({(int)response.StatusCode})");
+            }
+
+            return server;
+        }
+
+        async static public Task<bool> viewServers()
+        {
+            bool rv = false;
+
+            // https://discord.com/api/v9/users/@me/guilds
+            string url = $"https://discord.com/api/v9/users/@me/guilds";
+
+            prepareClient(url, new HttpMethod("GET"));
+
+            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+
+            if (response.IsSuccessStatusCode)
+            {
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                var servers = JsonConvert.DeserializeObject<ServerHeader[]>(responseBody);
+
+                foreach (var server in servers)
+                {
+                    Console.WriteLine($"{server.Id}: {server.name}");
+                }
+
+                rv = true;
+            }
+            else
+            {
+                Console.WriteLine($"Error getting list of servers! {response.StatusCode} ({(int)response.StatusCode})");
+                rv = false;
+            }
+
+
+            return (rv);
+        }
+
+        async static public Task<bool> viewChannels()
+        {
+            bool rv = false;
+
+            if (viewServerId == null)
+            {
+                Console.WriteLine("You need to pass a --server to view channels.");
+                return (false);
+            }
+
+
+            // https://discord.com/api/v9/users/@me/guilds
+            string url = $"https://discord.com/api/v9/guilds/{viewServerId}/channels";
+
+            prepareClient(url, new HttpMethod("GET"));
+
+            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+
+            if (response.IsSuccessStatusCode)
+            {
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                var channels = JsonConvert.DeserializeObject<Channel[]>(responseBody);
+
+                foreach (var channel in channels)
+                {
+                    Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
+                    foreach (var overwrite in channel.PermissionOverwrites)
+                    {
+                        Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
+                    }
+                }
+
+                rv = true;
+            }
+            else
+            {
+                Console.WriteLine($"Error getting list of channels! {response.StatusCode} ({(int)response.StatusCode})");
+                rv = false;
+            }
+
+
+            return (rv);
+        }
+
+        async static public Task<bool> viewMessages(int totalLimit = 100)
+        {
+            bool rv = false;
+            string lastMessageId = null;
+            int messagesFetched = 0;
+            List<string> allMessages = new List<string>();
+
+            int loop = 1;
+            int remainingMessages = totalLimit - messagesFetched;
+
+            while (remainingMessages > 0)
+            {
+                int fetchCount = remainingMessages > messagesPerFetch ? messagesPerFetch : remainingMessages;
+
+                string url = $"https://discord.com/api/v9/channels/{channelId}/messages?limit={fetchCount}";
+
+                if (lastMessageId != null)
+                {
+                    url += $"&before={lastMessageId}";
+                }
+
+                //Console.WriteLine(url);
+
+                prepareClient(url, new HttpMethod("GET"));
+
+                HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+
+                if (response.IsSuccessStatusCode)
+                {
+
+                    string responseBody = await response.Content.ReadAsStringAsync();
+                    //Console.WriteLine($"{responseBody}");
+                    var messages = JsonConvert.DeserializeObject<Message[]>(responseBody);
+
+                    foreach (var message in messages)
+                    {
+                        DateTime date = message.Timestamp;
+                        string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
+                        //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
+                        string msg = $"Loop {loop}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
+                        allMessages.Add(msg);
+                    }
+
+                    messagesFetched += messages.Length;
+                    if (messages.Length > 0)
+                    {
+                        lastMessageId = messages[messages.Length - 1].Id;
+                    }
+
+                    remainingMessages = totalLimit - messagesFetched;
+
+                    if (messages.Count() < messagesPerFetch)
+                    {
+                        remainingMessages = 0;
+                    }
+
+                    rv = true;
+                }
+                else
+                {
+                    Console.WriteLine($"ERROR happening getting messages! {url}");
+                    rv = false;
+                }
+
+                //Console.WriteLine($"Response Status Code: {response.StatusCode} ({(int)response.StatusCode})");
+                //Console.WriteLine($"Response Body: {responseBody}");
+
+                loop++;
+            }
+
+            //TODO fix this, I don't understand what this does; it only affects the output. not the query, what was I trying to do with this?!
+            if (orderBy == "desc")
+            {
+                allMessages.Reverse();
+            }
+
+            foreach (var message in allMessages)
+            {
+                Console.WriteLine(message);
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> sendText()
+        {
+            bool rv = false;
+
+            string url = $"https://discord.com/api/v9/channels/{channelId}/messages";
+            prepareClient(url, new HttpMethod("POST"));
+
+            var obj = new { content = textToSend };
+            string jsonContent = JsonConvert.SerializeObject(obj);
+
+            httpRequest.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+            string responseBody = await response.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"Request: {jsonContent}");
+            Console.WriteLine($"Response Status Code: {response.StatusCode} ({(int)response.StatusCode})");
+            Console.WriteLine($"Response Body: {responseBody}");
+
+            return (rv);
+        }
+
+        static public void prepareClient(string url, HttpMethod method)
+        {
+
+            var handler = new HttpClientHandler();
+            handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip |
+                                             System.Net.DecompressionMethods.Deflate;
+
+            httpClient = new HttpClient(handler);
+            httpRequest = new HttpRequestMessage(method, url);
+            httpRequest.Headers.TryAddWithoutValidation("Authorization", $"{token}");
+            httpRequest.Headers.TryAddWithoutValidation("Content-Type", "application/json");
+            httpRequest.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9042 Chrome/120.0.6099.291 Electron/28.2.10 Safari/537.36");
+            httpRequest.Headers.TryAddWithoutValidation("Accept", "*/*");
+            httpRequest.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+            httpRequest.Headers.TryAddWithoutValidation("Accept-Language", "en-US");
+            httpRequest.Headers.TryAddWithoutValidation("Origin", "https://discord.com");
+            httpRequest.Headers.TryAddWithoutValidation("Sec-Ch-Ua", "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\"");
+            httpRequest.Headers.TryAddWithoutValidation("Sec-Ch-Ua-Mobile", "?0");
+            httpRequest.Headers.TryAddWithoutValidation("Sec-Ch-Ua-Platform", "\"Windows\"");
+            httpRequest.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
+            httpRequest.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
+            httpRequest.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
+            httpRequest.Headers.TryAddWithoutValidation("X-Debug-Options", "bugReporterEnabled");
+            httpRequest.Headers.TryAddWithoutValidation("X-Discord-Locale:", "en-US");
+            httpRequest.Headers.TryAddWithoutValidation("X-Discord-Timezone", "America/Los_Angeles");
+        }
+
+        static bool parseArgs(string[] args)
+        {
+            bool showHelp = false;
+            bool showVer = false;
+
+
+
+            var p = new OptionSet() {
+                { "messages", "View messages in channel specified", v => boolViewMessages = true },
+                { "servers", "View servers you are connected to.", v=> boolViewServers = true },
+                { "channels", "View Channels available on a server.", v=> boolViewChannels = true },
+                { "roles", "View Roles available on a server.", v=> boolViewRoles = true },
+                { "emojis", "View Emojis available on a server.", v=> boolViewEmojis = true },
+                { "stickers", "View Stickers available on a server.", v=> boolViewStickers = true },
+                { "server=", "View a specific server, pass it's Id", v=> viewServerId = v },
+                { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
+                { "msglimit=", "Total # of messages to retrieve. Default=100.", v=> totalMessageLimit = int.Parse(v) },
+                { "msgpp=", "# of message to retrieve per request.Default 100.", v=> messagesPerFetch = int.Parse(v) },
+                { "say=", "What text to send.",option => textToSend = option },
+                { "profile=", "View someone's profile", option => userId = option },
+                { "channel=", "Channel ID to send message to.",option => channelId = option },
+                { "order=", "Date Order, 'desc' or 'asc'.",option => orderBy = option },
+                { "t", "TEST MODE, don't update any database tables.", option => testMode = true },
+                { "d", "DEBUG MODE, print out extra info.", option => debugMode = true },
+                { "h|help",  "show this message and exit", v => showHelp = v != null },
+                { "v|ver|version", "Display application version.", v=> showVer = true }
+            };
+
+            try
+            {
+                p.Parse(args);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Invalid ARGS: " + e.Message);
+                return (false);
+            }
+
+            if (args.Length == 0)
+            {
+                Console.WriteLine("You need to pass in an argument.");
+                ShowHelp(p);
+                return (false);
+            }
+
+            if (showVer)
+            {
+                Console.WriteLine("DiscTalk, Copyright (C) 2024 Whiskerz Version " + Assembly.GetExecutingAssembly().GetName().Version);
+            }
+
+            if (showHelp)
+            {
+                ShowHelp(p);
+            }
+
+
+            if (showVer || showHelp)
+            {
+                // Don't continue to execute the program.
+                return (false);
+            }
+
+            return (true); // Successfully parsed, nothing requires program to stop.
+        }
+
+        static void ShowHelp(OptionSet p)
+        {
+            Console.WriteLine("Options:");
+            p.WriteOptionDescriptions(Console.Out);
+        }
+
+        public class Message
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("type")]
+            public int Type { get; set; }
+
+            [JsonProperty("content")]
+            public string Content { get; set; }
+
+            [JsonProperty("channel_id")]
+            public string ChannelId { get; set; }
+
+            [JsonProperty("author")]
+            public Author Author { get; set; }
+
+            [JsonProperty("attachments")]
+            public List<Attachment> Attachments { get; set; }
+
+            [JsonProperty("embeds")]
+            public List<Embed> Embeds { get; set; }
+
+            [JsonProperty("mentions")]
+            public List<UserMention> Mentions { get; set; }
+
+            [JsonProperty("mention_roles")]
+            public List<string> MentionRoles { get; set; }
+
+            [JsonProperty("pinned")]
+            public bool Pinned { get; set; }
+
+            [JsonProperty("mention_everyone")]
+            public bool MentionEveryone { get; set; }
+
+            [JsonProperty("tts")]
+            public bool Tts { get; set; }
+
+            [JsonProperty("timestamp")]
+            public DateTime Timestamp { get; set; }
+
+            [JsonProperty("edited_timestamp")]
+            public DateTime? EditedTimestamp { get; set; }
+
+            [JsonProperty("flags")]
+            public int Flags { get; set; }
+
+            [JsonProperty("components")]
+            public List<Component> Components { get; set; }
+
+        }
+
+        public class Author
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("username")]
+            public string Username { get; set; }
+
+            [JsonProperty("avatar")]
+            public string Avatar { get; set; }
+
+            [JsonProperty("discriminator")]
+            public string Discriminator { get; set; }
+
+            [JsonProperty("public_flags")]
+            public int PublicFlags { get; set; }
+
+            [JsonProperty("flags")]
+            public int Flags { get; set; }
+
+            [JsonProperty("banner")]
+            public string Banner { get; set; }
+
+            [JsonProperty("accent_color")]
+            public string AccentColor { get; set; }
+
+            [JsonProperty("global_name")]
+            public string GlobalName { get; set; }
+
+            [JsonProperty("avatar_decoration_data")]
+            public string AvatarDecorationData { get; set; }
+
+            [JsonProperty("banner_color")]
+            public string BannerColor { get; set; }
+
+            [JsonProperty("clan")]
+            public string Clan { get; set; }
+
+        }
+
+        public class Attachment
+        {
+            // Define attachment properties based on your API documentation
+        }
+
+        public class Embed
+        {
+            // Define embed properties based on your API documentation
+        }
+
+        public class UserMention
+        {
+            // Define user mention properties based on your API documentation
+        }
+
+        public class Component
+        {
+            // Define component properties based on your API documentation
+        }
+
+        public class ServerHeader
+        {
+            public string Id { get; set; }
+            public string name { get; set; }
+        }
+
+        public class Server
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("icon")]
+            public string Icon { get; set; }
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("home_header")]
+            public object HomeHeader { get; set; }
+
+            [JsonProperty("splash")]
+            public string Splash { get; set; }
+
+            [JsonProperty("discovery_splash")]
+            public string DiscoverySplash { get; set; }
+
+            [JsonProperty("features")]
+            public string[] Features { get; set; }
+
+            [JsonProperty("banner")]
+            public object Banner { get; set; }
+
+            [JsonProperty("owner_id")]
+            public string OwnerId { get; set; }
+
+            [JsonProperty("application_id")]
+            public object ApplicationId { get; set; }
+
+            [JsonProperty("region")]
+            public string Region { get; set; }
+
+            [JsonProperty("afk_channel_id")]
+            public object AfkChannelId { get; set; }
+
+            [JsonProperty("afk_timeout")]
+            public int AfkTimeout { get; set; }
+
+            [JsonProperty("system_channel_id")]
+            public string SystemChannelId { get; set; }
+
+            [JsonProperty("system_channel_flags")]
+            public int SystemChannelFlags { get; set; }
+
+            [JsonProperty("widget_enabled")]
+            public bool WidgetEnabled { get; set; }
+
+            [JsonProperty("widget_channel_id")]
+            public object WidgetChannelId { get; set; }
+
+            [JsonProperty("verification_level")]
+            public int VerificationLevel { get; set; }
+
+            [JsonProperty("roles")]
+            public Role[] Roles { get; set; }
+
+            [JsonProperty("default_message_notifications")]
+            public int DefaultMessageNotifications { get; set; }
+
+            [JsonProperty("mfa_level")]
+            public int MfaLevel { get; set; }
+
+            [JsonProperty("explicit_content_filter")]
+            public int ExplicitContentFilter { get; set; }
+
+            [JsonProperty("max_presences")]
+            public object MaxPresences { get; set; }
+
+            [JsonProperty("max_members")]
+            public int MaxMembers { get; set; }
+
+            [JsonProperty("max_stage_video_channel_users")]
+            public int MaxStageVideoChannelUsers { get; set; }
+
+            [JsonProperty("max_video_channel_users")]
+            public int MaxVideoChannelUsers { get; set; }
+
+            [JsonProperty("vanity_url_code")]
+            public string VanityUrlCode { get; set; }
+
+            [JsonProperty("premium_tier")]
+            public int PremiumTier { get; set; }
+
+            [JsonProperty("premium_subscription_count")]
+            public int PremiumSubscriptionCount { get; set; }
+
+            [JsonProperty("preferred_locale")]
+            public string PreferredLocale { get; set; }
+
+            [JsonProperty("rules_channel_id")]
+            public string RulesChannelId { get; set; }
+
+            [JsonProperty("safety_alerts_channel_id")]
+            public string SafetyAlertsChannelId { get; set; }
+
+            [JsonProperty("public_updates_channel_id")]
+            public string PublicUpdatesChannelId { get; set; }
+
+            [JsonProperty("hub_type")]
+            public object HubType { get; set; }
+
+            [JsonProperty("premium_progress_bar_enabled")]
+            public bool PremiumProgressBarEnabled { get; set; }
+
+            [JsonProperty("latest_onboarding_question_id")]
+            public string LatestOnboardingQuestionId { get; set; }
+
+            [JsonProperty("nsfw")]
+            public bool Nsfw { get; set; }
+
+            [JsonProperty("nsfw_level")]
+            public int NsfwLevel { get; set; }
+
+            [JsonProperty("emojis")]
+            public Emoji[] Emojis { get; set; }
+
+            [JsonProperty("stickers")]
+            public Sticker[] Stickers { get; set; }
+
+            [JsonProperty("incidents_data")]
+            public IncidentsData IncidentsData { get; set; }
+
+            [JsonProperty("inventory_settings")]
+            public object InventorySettings { get; set; }
+
+            [JsonProperty("embed_enabled")]
+            public bool EmbedEnabled { get; set; }
+
+            [JsonProperty("embed_channel_id")]
+            public object EmbedChannelId { get; set; }
+        }
+
+        // A slender version of the Server class. Contains member counts also, server class doesn't.
+        public class ServerPreview
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("icon")]
+            public string Icon { get; set; }
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("home_header")]
+            public object HomeHeader { get; set; }
+
+            [JsonProperty("splash")]
+            public string Splash { get; set; }
+
+            [JsonProperty("discovery_splash")]
+            public string DiscoverySplash { get; set; }
+
+            [JsonProperty("features")]
+            public string[] Features { get; set; }
+
+            [JsonProperty("approximate_member_count")]
+            public int MemberCount { get; set; }
+
+            [JsonProperty("approximate_presence_count")]
+            public int PresenceCount { get; set; }
+
+            [JsonProperty("emojis")]
+            public Emoji[] Emojis { get; set; }
+
+            [JsonProperty("stickers")]
+            public Sticker[] Stickers { get; set; }
+
+        }
+
+        public class Role
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("permissions")]
+            public string Permissions { get; set; }
+
+            [JsonProperty("position")]
+            public int Position { get; set; }
+
+            [JsonProperty("color")]
+            public int Color { get; set; }
+
+            [JsonProperty("hoist")]
+            public bool Hoist { get; set; }
+
+            [JsonProperty("managed")]
+            public bool Managed { get; set; }
+
+            [JsonProperty("mentionable")]
+            public bool Mentionable { get; set; }
+
+            [JsonProperty("icon")]
+            public object Icon { get; set; }
+
+            [JsonProperty("unicode_emoji")]
+            public object UnicodeEmoji { get; set; }
+
+            [JsonProperty("flags")]
+            public int Flags { get; set; }
+        }
+
+        public class Emoji
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("roles")]
+            public string[] Roles { get; set; }
+
+            [JsonProperty("require_colons")]
+            public bool RequireColons { get; set; }
+
+            [JsonProperty("managed")]
+            public bool Managed { get; set; }
+
+            [JsonProperty("animated")]
+            public bool Animated { get; set; }
+
+            [JsonProperty("available")]
+            public bool Available { get; set; }
+        }
+
+        public class Sticker
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("tags")]
+            public string Tags { get; set; }
+
+            [JsonProperty("type")]
+            public int Type { get; set; }
+
+            [JsonProperty("format_type")]
+            public int FormatType { get; set; }
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("asset")]
+            public string Asset { get; set; }
+
+            [JsonProperty("available")]
+            public bool Available { get; set; }
+
+            [JsonProperty("guild_id")]
+            public string GuildId { get; set; }
+        }
+
+        public class IncidentsData
+        {
+            [JsonProperty("invites_disabled_until")]
+            public string InvitesDisabledUntil { get; set; }
+
+            [JsonProperty("dms_disabled_until")]
+            public object DmsDisabledUntil { get; set; }
+        }
+
+        public class Channel
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("type")]
+            public int Type { get; set; }
+
+            [JsonProperty("guild_id")]
+            public string GuildId { get; set; }
+
+            [JsonProperty("name")]
+            public string Name { get; set; }
+
+            [JsonProperty("last_message_id")]
+            public string LastMessageId { get; set; }
+
+            [JsonProperty("flags")]
+            public int Flags { get; set; }
+
+            [JsonProperty("last_pin_timestamp")]
+            public DateTime? LastPinTimestamp { get; set; }
+
+            [JsonProperty("parent_id")]
+            public string ParentId { get; set; }
+
+            [JsonProperty("rate_limit_per_user")]
+            public int? RateLimitPerUser { get; set; }
+
+            [JsonProperty("topic")]
+            public string Topic { get; set; }
+
+            [JsonProperty("default_thread_rate_limit_per_user")]
+            public int? DefaultThreadRateLimitPerUser { get; set; }
+
+            [JsonProperty("position")]
+            public int Position { get; set; }
+
+            [JsonProperty("permission_overwrites")]
+            public List<PermissionOverwrite> PermissionOverwrites { get; set; }
+
+            [JsonProperty("nsfw")]
+            public bool? Nsfw { get; set; }
+
+            [JsonProperty("icon_emoji")]
+            public Emoji IconEmoji { get; set; }
+
+            [JsonProperty("theme_color")]
+            public int? ThemeColor { get; set; }
+
+            [JsonProperty("bitrate")]
+            public int? Bitrate { get; set; }
+
+            [JsonProperty("user_limit")]
+            public int? UserLimit { get; set; }
+
+            [JsonProperty("rtc_region")]
+            public string RtcRegion { get; set; }
+
+        }
+
+        public class PermissionOverwrite
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("type")]
+            public int Type { get; set; }
+
+            [JsonProperty("allow")]
+            public string Allow { get; set; }
+
+            [JsonProperty("deny")]
+            public string Deny { get; set; }
+
+        }
+
+    }
+
+}
+
