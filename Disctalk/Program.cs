@@ -1,21 +1,15 @@
 ﻿using Mono.Options;
 using MySql.Data.MySqlClient;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
-using System.Runtime.Remoting.Messaging;
-using System.Security.Policy;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using static Disctalk.Program;
 
 namespace Disctalk
 {
@@ -38,6 +32,7 @@ namespace Disctalk
         static public bool boolServerPreview = false;
         static public bool boolUpdateUsers = false;
         static public bool boolUpdateUserServerInfo = false;
+        static public bool boolUpdateAllMessages = false;
         static public string viewServerId = null;
         static public string orderBy = "asc"; // anything not "desc" will imply "asc"
         static public bool testMode = false;
@@ -51,6 +46,28 @@ namespace Disctalk
         static public HttpRequestMessage httpRequest = null;
         static MySqlConnection dbConnection = null;
 
+        // Channels I don't have access to or were discontinued.
+        static public List<long> skipChannels = new List<long>
+        {
+            374631528275378176, // Voice Channels
+            374631528275378177, // General (not general)
+            374633617588224001, // Topics
+            374677953004437514, // Gaming (not gaming)
+            428448605762748426, // hall of justice
+            628435158902636586, // craigslist
+            747310713403342869, // movie night
+            748691464481144952, // bot log
+            798357201605099570, // pinterest
+            882133723892568076, // Music
+            882789707468136458, // theta
+            882789786560102490, // coastal town
+            964682118884110346, // the forgotten one eye
+            991863219008307200, // Main
+            991948107954786365, // Admin
+            1021969695433314314, // void
+            1187489188417917029, // meetups
+            1228558055248232558,  // automod log
+        };
 
 
         static async Task Main(string[] args)
@@ -67,7 +84,16 @@ namespace Disctalk
 
             if (boolViewMessages)
             {
-                await viewMessages(totalMessageLimit);
+                List<Message> messages = await getMessages(long.Parse(channelId), totalMessageLimit, true);
+                foreach (Message message in messages)
+                {
+                    DateTime date = message.Timestamp;
+                    string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
+                    //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
+                    string msg = $"{message.Id}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
+                    Console.WriteLine(msg);
+                }
+
                 return;
             }
 
@@ -79,7 +105,19 @@ namespace Disctalk
 
             if (boolViewChannels)
             {
-                await viewChannels();
+                List<Channel> channels = await getChannels(long.Parse(viewServerId));
+                foreach (var channel in channels)
+                {
+                    Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
+                    foreach (var overwrite in channel.PermissionOverwrites)
+                    {
+                        //Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
+                    }
+                    channel.rawJson = JsonConvert.SerializeObject(channel);
+
+                    await SaveChannel(channel);
+
+                }
                 return;
             }
 
@@ -115,6 +153,19 @@ namespace Disctalk
                 return;
             }
 
+            if (boolUpdateAllMessages)
+            {
+                if (viewServerId == null)
+                {
+                    Console.WriteLine("You must pass a serverId to update messages on.");
+                    return;
+                }
+
+                await updateAllMessages(long.Parse(viewServerId));
+
+                return;
+            }
+
             if (boolViewEmojis && viewServerId == null)
             {
                 Console.WriteLine("You need to specify a serverId to view emojis, dork.");
@@ -144,9 +195,12 @@ namespace Disctalk
                 // Emojis and Stickers are available in verbose and preview modes.
                 if (boolViewEmojis)
                 {
-                    foreach (var emoji in server.Emojis)
+                    foreach (Emoji emoji in server.Emojis)
                     {
+                        emoji.rawJson = JsonConvert.SerializeObject(emoji);
                         Console.WriteLine($"{emoji.Name}");
+
+                        await SaveEmoji(emoji);
                     }
                 }
 
@@ -162,6 +216,30 @@ namespace Disctalk
                 return;
             }
 
+        }
+
+        async static public Task<bool> updateAllMessages(long serverId)
+        {
+            bool rv = false;
+
+            List<Channel> channels = await getChannels(serverId);
+            int channelCount = 1;
+            int totalChannels = channels.Count;
+            foreach (Channel c in channels)
+            {
+                if (skipChannels.Contains(c.Id))
+                {
+                    Console.WriteLine($"Skipping unreachable channel {c.Name} ({c.Id})");
+                    continue;
+                }
+
+                Console.WriteLine($"\nUpdating Channel: {c.Name} {c.Id}... ({channelCount} / {totalChannels}");
+                List<Message> messages = await getMessages(c.Id, 999999, true);
+                Console.WriteLine($"Updated {messages.Count()} in channel {c.Name} ({c.Id})");
+            }
+
+
+            return (rv);
         }
 
         async static public Task<bool> updateAllUsers()
@@ -465,6 +543,7 @@ namespace Disctalk
         async static public Task<dynamic> getServer(string guildId)
         {
             // https://discord.com/api/v9/guilds/[serverId]
+            // https://discord.com/api/v9/guilds/[serverId]/preview
             Server server = new Server();
 
             string url = $"https://discord.com/api/v9/guilds/{guildId}" + (boolServerPreview ? "/preview" : "");
@@ -528,19 +607,19 @@ namespace Disctalk
             return (rv);
         }
 
-        async static public Task<bool> viewChannels()
+        async static public Task<List<Channel>> getChannels(long serverId)
         {
-            bool rv = false;
+            List<Channel> channels = new List<Channel>();
 
             if (viewServerId == null)
             {
                 Console.WriteLine("You need to pass a --server to view channels.");
-                return (false);
+                return (null);
             }
 
 
             // https://discord.com/api/v9/users/@me/guilds
-            string url = $"https://discord.com/api/v9/guilds/{viewServerId}/channels";
+            string url = $"https://discord.com/api/v9/guilds/{serverId}/channels";
 
             prepareClient(url, new HttpMethod("GET"));
 
@@ -551,48 +630,62 @@ namespace Disctalk
 
                 string responseBody = await response.Content.ReadAsStringAsync();
                 if (debugMode) { Console.WriteLine(responseBody); }
-                var channels = JsonConvert.DeserializeObject<Channel[]>(responseBody);
-
-                foreach (var channel in channels)
-                {
-                    Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
-                    foreach (var overwrite in channel.PermissionOverwrites)
-                    {
-                        //Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
-                    }
-                    channel.rawJson = JsonConvert.SerializeObject(channel);
-
-                    await SaveChannel(channel);
-
-                }
-
-                rv = true;
+                channels = JsonConvert.DeserializeObject<Channel[]>(responseBody).ToList<Channel>();
             }
             else
             {
                 Console.WriteLine($"Error getting list of channels! {response.StatusCode} ({(int)response.StatusCode})");
-                rv = false;
+                return (null);
             }
 
 
-            return (rv);
+            return (channels);
         }
 
-        async static public Task<bool> viewMessages(int totalLimit = 100)
+        async static public Task<List<Message>> getMessages(long channelId, int totalLimit = 100, bool updateNew = false)
         {
             //TODO this doesn't read inline image attachments like in #hall_of_fame. FIX!
 
-            bool rv = false;
             string lastMessageId = null;
             int messagesFetched = 0;
-            List<string> allMessages = new List<string>();
+            List<Message> allMessages = new List<Message>();
+
+            // updateNew bool means we find the most recent message in the database, and we fetch messages in reverse chronological order
+            // until we've reached a message older than the newest database message, then we abort because now we're current.
+            DateTime maxDateTime = DateTime.MinValue;
+            if (updateNew)
+            {
+                string selectQuery = $"SELECT ifnull(max(TIMESTAMP),-1) as lastMsgDate FROM messages where channelId = {channelId}";
+                using (var command = new MySqlCommand(selectQuery, dbConnection))
+                {
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string result = reader["lastMsgDate"].ToString();
+                            if (result == "-1")
+                            {
+                                // we have NO messages for this channel, so let's get everything!
+                                maxDateTime = DateTime.MinValue;
+                            }
+                            else
+                            {
+                                maxDateTime = DateTime.Parse(reader["lastMsgDate"].ToString());
+                            }
+                        }
+                    }
+                }
+            }
+            Console.WriteLine($"Getting All New Messages after last date of {maxDateTime}");
 
             DateTime lastTimeStamp = DateTime.MinValue;
             int loop = 1;
             int remainingMessages = totalLimit - messagesFetched;
 
-            while (remainingMessages > 0)
+            bool breakLoop = false;
+            while (remainingMessages > 0 && breakLoop == false)
             {
+                
                 int fetchCount = remainingMessages > messagesPerFetch ? messagesPerFetch : remainingMessages;
 
                 string url = $"https://discord.com/api/v9/channels/{channelId}/messages?limit={fetchCount}";
@@ -614,36 +707,41 @@ namespace Disctalk
 
                 if (response.IsSuccessStatusCode)
                 {
+                    List<Message> messages = new List<Message>();
                     string responseBody = "";
-                    Message[] messages = null;
                     try
                     {
                         responseBody = await response.Content.ReadAsStringAsync();
                         //Console.WriteLine($"{responseBody}");
-                        messages = JsonConvert.DeserializeObject<Message[]>(responseBody);
+                        messages = JsonConvert.DeserializeObject<Message[]>(responseBody).ToList<Message>();
 
                         foreach (var message in messages)
                         {
                             DateTime date = message.Timestamp;
                             lastTimeStamp = date;
-                            string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
-                            //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
-                            string msg = $"{message.Id}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
                             message.json = JsonConvert.SerializeObject(message);
                             //Console.WriteLine($"JSON: {message.json}");
-                            SaveMessage(message.Id, message.json);
-                            allMessages.Add(msg);
+                            if (updateNew && (lastTimeStamp < maxDateTime))
+                            {
+                                // We've come to a message older than the newest message in the database, so we're all caught up!
+                                Console.WriteLine($"{lastTimeStamp} < {maxDateTime}, all caught up, breaking out of loop!");
+                                breakLoop = true;
+                                break;
+                            }
+                            allMessages.Add(message);
+                            SaveMessage(message);
                         }
+
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"FAILED parsing message! {responseBody}. {ex.Message} {ex.StackTrace}");
                     }
 
-                    messagesFetched += messages.Length;
-                    if (messages.Length > 0)
+                    messagesFetched += messages.Count();
+                    if (messages.Count() > 0)
                     {
-                        lastMessageId = messages[messages.Length - 1].Id;
+                        lastMessageId = messages[messages.Count() - 1].Id;
                     }
 
                     remainingMessages = totalLimit - messagesFetched;
@@ -653,13 +751,11 @@ namespace Disctalk
                         remainingMessages = 0;
                     }
 
-                    rv = true;
                 }
                 else
                 {
                     Console.WriteLine($"ERROR happening getting messages! {url}. {response.StatusCode} ({(int)response.StatusCode})");
                     break;
-                    rv = false;
                 }
 
                 //Console.WriteLine($"Response Status Code: {response.StatusCode} ({(int)response.StatusCode})");
@@ -673,16 +769,12 @@ namespace Disctalk
             {
                 allMessages.Reverse();
             }
+            
 
-            foreach (var message in allMessages)
-            {
-                Console.WriteLine(message);
-            }
-
-            return (rv);
+            return (allMessages);
         }
 
-        static public void SaveMessage(string messageId, string jsonData)
+        static public void SaveMessage(Message message)
         {
             string delQuery = "";
             string insertQuery = "";
@@ -694,24 +786,23 @@ namespace Disctalk
                 delQuery = "DELETE from messages where messageId = @id";
                 using (var command = new MySqlCommand(delQuery, dbConnection))
                 {
-                    command.Parameters.AddWithValue("@id", messageId);
+                    command.Parameters.AddWithValue("@id", message.Id);
                     command.ExecuteNonQuery();
                 }
 
-                var parsed = JsonConvert.DeserializeObject<Message>(jsonData);
-
+                //Console.WriteLine($"Inserting {message.Id}: {message.Author.Username} {message.Timestamp}");
                 insertQuery = @"INSERT INTO messages (messageId, channelId, authorId, authorUsername, content, timestamp, json) 
                         VALUES 
                         (@id, @channel, @author, @user, @content, @timestamp, @json)";
                 using (var command = new MySqlCommand(insertQuery, dbConnection))
                 {
-                    command.Parameters.AddWithValue("@id", messageId);
-                    command.Parameters.AddWithValue("@channel", parsed.ChannelId);
-                    command.Parameters.AddWithValue("@author", parsed.Author.Id);
-                    command.Parameters.AddWithValue("@user", parsed.Author.Username);
-                    command.Parameters.AddWithValue("@content", parsed.Content);
-                    command.Parameters.AddWithValue("@timestamp", parsed.Timestamp);
-                    command.Parameters.AddWithValue("@json", jsonData);
+                    command.Parameters.AddWithValue("@id", message.Id);
+                    command.Parameters.AddWithValue("@channel", message.ChannelId);
+                    command.Parameters.AddWithValue("@author", message.Author.Id);
+                    command.Parameters.AddWithValue("@user", message.Author.Username);
+                    command.Parameters.AddWithValue("@content", message.Content);
+                    command.Parameters.AddWithValue("@timestamp", message.Timestamp);
+                    command.Parameters.AddWithValue("@json", message.json);
 
                     command.ExecuteNonQuery();
                 }
@@ -719,7 +810,7 @@ namespace Disctalk
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"error inserting message: del={delQuery}{messageId}{jsonData},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+                Console.WriteLine($"error inserting message: del={delQuery}{message.Id}{message.json},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
             }
         }
 
@@ -730,31 +821,34 @@ namespace Disctalk
             string delQuery = "";
             string insertQuery = "";
 
-            if (user == null && userId != -1)
-            {
-                // User is not on the server anymore, but let's mark them in the system so we don't keep trying to find them over and over again.
-                insertQuery = @"INSERT INTO users 
-                    (userId, username, bio, legacyUsername, json) 
-                        VALUES 
-                    (@id, 'NULL', '', '', '')";
-                using (var command = new MySqlCommand(insertQuery, dbConnection))
-                {
-                    command.Parameters.AddWithValue("@id", userId);
-                    command.ExecuteNonQuery();
-                }
-                Console.WriteLine($"Adding NULL entry for userId {userId}");
-                return (true);
-            }
-
             try
             {
-
                 delQuery = "DELETE from users where userId = @id";
                 using (var command = new MySqlCommand(delQuery, dbConnection))
                 {
                     command.Parameters.AddWithValue("@id", user.User.Id);
                     command.ExecuteNonQuery();
                 }
+
+                if (user == null && userId != -1)
+                {
+                    // User is not on the server anymore, but let's mark them in the system so we don't keep trying to find them over and over again.
+                    insertQuery = @"INSERT INTO users 
+                    (userId, username, bio, legacyUsername, json) 
+                        VALUES 
+                    (@id, 'NULL', '', '', '')";
+                    using (var command = new MySqlCommand(insertQuery, dbConnection))
+                    {
+                        command.Parameters.AddWithValue("@id", userId);
+                        command.ExecuteNonQuery();
+                    }
+                    Console.WriteLine($"Adding NULL entry for userId {userId}");
+                    return (true);
+                }
+
+
+
+             
 
                 insertQuery = @"INSERT INTO users 
                     (userId, username, bio, legacyUsername, json) 
@@ -776,6 +870,46 @@ namespace Disctalk
             catch (Exception ex)
             {
                 Console.WriteLine($"error inserting User: del={delQuery}{user.User.Id}{user.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+                rv = false;
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> SaveEmoji(Emoji emoji)
+        {
+            bool rv = false;
+
+            string delQuery = "";
+            string insertQuery = "";
+
+            try
+            {
+                delQuery = "DELETE from emojis where id = @id";
+                using (var command = new MySqlCommand(delQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", emoji.Id);
+                    command.ExecuteNonQuery();
+                }
+
+                insertQuery = @"INSERT INTO emojis
+                    (id, name, rawJson) 
+                        VALUES 
+                    (@id, @name, @json)";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", emoji.Id);
+                    command.Parameters.AddWithValue("@name", emoji.Name);
+                    command.Parameters.AddWithValue("@json", emoji.rawJson);
+
+                    command.ExecuteNonQuery();
+                }
+
+                rv = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"error inserting Emoji: del={delQuery}{emoji.Id}{emoji.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
                 rv = false;
             }
 
@@ -1327,6 +1461,9 @@ namespace Disctalk
 
             [JsonProperty("available")]
             public bool Available { get; set; }
+
+
+            public string rawJson { get; set; }
         }
 
         public class Sticker
@@ -1371,7 +1508,7 @@ namespace Disctalk
         public class Channel
         {
             [JsonProperty("id")]
-            public string Id { get; set; }
+            public long Id { get; set; }
 
             [JsonProperty("type")]
             public int Type { get; set; }
@@ -1627,6 +1764,7 @@ namespace Disctalk
                 { "say=", "What text to send.",option => textToSend = option },
                 { "saveusers", "Look up ALL user info and update the database.", v => boolUpdateUsers = true },
                 { "saveuserserverinfo", "Look up ALL server specific user info and update the database.", v => boolUpdateUserServerInfo = true },
+                { "updatemessages", "Update ALL channels with current messages newer than last fetched.", v => boolUpdateAllMessages = true },
                 { "profile=", "View someone's profile", option => userId = option },
                 { "channel=", "Channel ID to view or send message to.",option => channelId = option },
                 { "order=", "Date Order, 'desc' or 'asc'. UNIMPLEMENTED?",option => orderBy = option },
