@@ -1,16 +1,21 @@
 ﻿using Mono.Options;
+using MySql.Data.MySqlClient;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Data.SqlClient;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using System.Runtime.Remoting.Messaging;
 using System.Security.Policy;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
+using static Disctalk.Program;
 
 namespace Disctalk
 {
@@ -20,8 +25,9 @@ namespace Disctalk
 
         static public string textToSend = null;
         static public string userId = null;
-        static public string channelId = "950297385559523344"; // Default to my private hiking discord #general channel
+        static public string channelId = null;
         static public int messagesPerFetch = 100;
+        static public long startingMsgId = -1;
         static public int totalMessageLimit = 100;
         static public bool boolViewMessages = false;
         static public bool boolViewServers = false;
@@ -30,20 +36,28 @@ namespace Disctalk
         static public bool boolViewEmojis = false;
         static public bool boolViewStickers = false;
         static public bool boolServerPreview = false;
+        static public bool boolUpdateUsers = false;
+        static public bool boolUpdateUserServerInfo = false;
         static public string viewServerId = null;
-        static public string orderBy = "desc";
+        static public string orderBy = "asc"; // anything not "desc" will imply "asc"
         static public bool testMode = false;
         static public bool debugMode = false;
-        static public string token = Environment.GetEnvironmentVariable("MY_DISCORD_TOKEN");
+        static public string token = Environment.GetEnvironmentVariable("MY_BOT_TOKEN");
+        static public bool tooManyRequests = false;
+
+        static public bool KILLSWITCH = false;
 
         static public HttpClient httpClient = null;
         static public HttpRequestMessage httpRequest = null;
+        static MySqlConnection dbConnection = null;
 
 
 
         static async Task Main(string[] args)
         {
             if (!parseArgs(args)) { return; }
+
+            await connectToDB();
 
             if (textToSend != null)
             {
@@ -71,7 +85,39 @@ namespace Disctalk
 
             if (userId != null)
             {
-                await viewUserProfile(long.Parse(userId));
+                if (viewServerId != null)
+                {
+                    await viewUserServerProfile(long.Parse(viewServerId), long.Parse(userId));
+                }
+                else
+                {
+                    await viewUserProfile(long.Parse(userId));
+                }
+
+                return;
+            }
+
+            if (boolUpdateUsers)
+            {
+                await updateAllUsers();
+                return;
+            }
+
+            if (boolUpdateUserServerInfo)
+            {
+                if (viewServerId == null)
+                {
+                    Console.WriteLine($"You need to pass in a serverId to update user Server Info.");
+                    return;
+                }
+
+                await updateAllUserServerInfo(long.Parse(viewServerId));
+                return;
+            }
+
+            if (boolViewEmojis && viewServerId == null)
+            {
+                Console.WriteLine("You need to specify a serverId to view emojis, dork.");
                 return;
             }
 
@@ -118,44 +164,307 @@ namespace Disctalk
 
         }
 
-        async static public Task<bool> viewUserProfile(long userId)
+        async static public Task<bool> updateAllUsers()
         {
             bool rv = false;
 
+            string selectQuery = "SELECT distinct authorId as userId FROM messages where authorId not in (select userId from users)";
+            List<long> userIds = new List<long>();
 
+            using (var command = new MySqlCommand(selectQuery, dbConnection))
+            {
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string userId = reader["userId"].ToString();
+                        userIds.Add(long.Parse(userId));
+                    }
+                }
+            }
+
+            foreach (long id in userIds)
+            {
+                await viewUserProfile(id);
+                Thread.Sleep(1000); // play nice, don't exceed requests limit.
+                if (KILLSWITCH)
+                {
+                    Console.WriteLine("429, dying for now to play nice...");
+                    break;
+                }
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> updateAllUserServerInfo(long serverId)
+        {
+            bool rv = false;
+
+            // Get users that are still on the server, and we haven't got the profile yet.
+            string selectQuery = "SELECT userId FROM users where username <> 'NULL' and userId not in (select userId from usersServerInfo)";
+            List<long> userIds = new List<long>();
+
+            using (var command = new MySqlCommand(selectQuery, dbConnection))
+            {
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string userId = reader["userId"].ToString();
+                        userIds.Add(long.Parse(userId));
+                    }
+                }
+            }
+
+            foreach (long id in userIds)
+            {
+                await viewUserServerProfile(serverId, id);
+                Thread.Sleep(1000); // play nice, don't exceed requests limit.
+                if (KILLSWITCH)
+                {
+                    Console.WriteLine($"429, server {serverId}, user {id}. Dying for now...");
+                    break;
+                }
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> viewUserServerProfile(long serverId, long userId)
+        {
+            bool rv = false;
+
+            UserServerInfo user = await getUserServerInfo(serverId, userId);
+            if (user == null)
+            {
+                Console.WriteLine($"Could not get info for userId {userId}, server {serverId}");
+                // Mark them invalid so we don't keep checking next time.
+                if (!tooManyRequests)
+                {
+                    // Don't mark them if the null is because of a 429; we'll retry later.
+                    SaveUserServerInfo(null, serverId, userId);
+                }
+
+                return (false);
+            }
+            Console.WriteLine($"JSON: {user.rawJson}");
+            Console.WriteLine($"User {userId}: {user.User.Username}\n{user.rawJson}");
+            SaveUserServerInfo(user);
 
 
             return (rv);
         }
 
-        // NOT IMPLEMENTED YET!!
-        async static public Task<bool> getUser(string userId)
+        async static public Task<bool> viewUserProfile(long userId)
         {
-            //    https://discord.com/api/v9/users/779830303065767987
-            // or https://discord.com/api/v9/guilds/374631527335723018/members/779830303065767987 for more info
-            // or https://discord.com/api/v9/users/779830303065767987/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=false
-            
-            string url = $"https://discord.com/api/v9/users/{userId}";
+            bool rv = false;
+
+            RootUserObject user = await getUser(userId);
+            if (user == null)
+            {
+                Console.WriteLine($"Could not get info for userId {userId}");
+                // Mark them invalid so we don't keep checking next time.
+                if (!tooManyRequests)
+                {
+                    // Don't mark them if the null is because of a 429; we'll retry later.
+                    SaveUser(null, userId);
+                }
+
+                return (false);
+            }
+            Console.WriteLine($"JSON: {user.rawJson}");
+            Console.WriteLine($"User {userId}: {user.User.Username}\n{user.rawJson}");
+            SaveUser(user);
+
+
+            return (rv);
+        }
+
+        async static public Task<RootUserObject> getUser(long userId)
+        {
+            //    https://discord.com/api/v9/users/[userid]
+            // or https://discord.com/api/v9/users/[userid]/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=false
+            // or https://discord.com/api/v9/guilds/[serverid]/members/[userId] for more server specific info
+
+            RootUserObject user = null;
+
+            string url = $"https://discord.com/api/v9/users/{userId}/profile";
 
             prepareClient(url, new HttpMethod("GET"));
 
             HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
 
+            string responseBody = "";
             if (response.IsSuccessStatusCode)
             {
-                string responseBody = await response.Content.ReadAsStringAsync();
+                try
+                {
+                    responseBody = await response.Content.ReadAsStringAsync();
+                    user = JsonConvert.DeserializeObject<RootUserObject>(responseBody);
+                    user.rawJson = responseBody;
+
+                    tooManyRequests = false;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error parsing JSON for userId {userId}. {ex.Message} {ex.StackTrace} JSON:{responseBody}");
+                }
+            }
+            else if (response.StatusCode == HttpStatusCode.Forbidden)
+            {
+                Console.WriteLine($"\nForbidden response, user probably no longer on server.");
+                return (null);
+            }
+            else if ((int)response.StatusCode == 429)
+            {
+                Console.WriteLine("Too many requests, pausing for a few* seconds...");
+
+                // Print all response headers
+                foreach (var header in response.Headers)
+                {
+                    Console.WriteLine($"Header: {header.Key}: {string.Join(", ", header.Value)}");
+                }
+
+                // If there are any content headers, print them as well
+                foreach (var contentHeader in response.Content.Headers)
+                {
+                    Console.WriteLine($"ContentHeader: {contentHeader.Key}: {string.Join(", ", contentHeader.Value)}");
+                }
+
+                int sleepTime = 90000; // Default sleep time in seconds if 'Retry-After' is not found
+                if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string> values))
+                {
+                    var retryAfterValue = values.First();
+                    if (int.TryParse(retryAfterValue, out int retrySeconds))
+                    {
+                        Console.WriteLine($"\nDELAY 429!!! Setting 429 delay time to Retry-After value of {retrySeconds} seconds");
+                        sleepTime = retrySeconds + 2; // + 2 for margin...
+                    }
+                    else
+                    {
+                        Console.WriteLine("Failed to parse 'Retry-After' header to an integer.");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("'Retry-After' header not found. Using default sleep time.");
+                }
+
+                Thread.Sleep(sleepTime * 1000); // Multiply by 1000 to convert seconds to milliseconds
+
+
+
+                tooManyRequests = true;
+
+                // Temp HACK, just die after the Retry-After timeout to play nice while developing...
+                KILLSWITCH = true;
+
+                return (null);
             }
             else
             {
                 Console.WriteLine($"Error getting user {userId}! {response.StatusCode} ({(int)response.StatusCode})");
             }
 
-            return false;
+            return user;
+        }
+
+
+        async static public Task<UserServerInfo> getUserServerInfo(long serverId, long userId)
+        {
+            // https://discord.com/api/v9/guilds/[serverId]/members/[userId] for more server specific info
+
+            UserServerInfo user = null;
+
+            string url = $"https://discord.com/api/v9/guilds/{serverId}/members/{userId}";
+
+            prepareClient(url, new HttpMethod("GET"));
+
+            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
+
+            string responseBody = "";
+            if (response.IsSuccessStatusCode)
+            {
+                try
+                {
+                    responseBody = await response.Content.ReadAsStringAsync();
+                    user = JsonConvert.DeserializeObject<UserServerInfo>(responseBody);
+                    user.serverId = serverId;
+                    user.rawJson = responseBody;
+
+
+                    tooManyRequests = false;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error parsing JSON for userId {userId}, server {serverId}. {ex.Message} {ex.StackTrace} JSON:{responseBody}");
+                }
+            }
+            else if (response.StatusCode == HttpStatusCode.Forbidden)
+            {
+                Console.WriteLine($"\nForbidden response, user probably no longer on server.");
+                return (null);
+            }
+            else if ((int)response.StatusCode == 429)
+            {
+                Console.WriteLine("Too many requests, pausing for a few* seconds...");
+
+                // Print all response headers
+                foreach (var header in response.Headers)
+                {
+                    Console.WriteLine($"Header: {header.Key}: {string.Join(", ", header.Value)}");
+                }
+
+                // If there are any content headers, print them as well
+                foreach (var contentHeader in response.Content.Headers)
+                {
+                    Console.WriteLine($"ContentHeader: {contentHeader.Key}: {string.Join(", ", contentHeader.Value)}");
+                }
+
+                int sleepTime = 90000; // Default sleep time in seconds if 'Retry-After' is not found
+                if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string> values))
+                {
+                    var retryAfterValue = values.First();
+                    if (int.TryParse(retryAfterValue, out int retrySeconds))
+                    {
+                        Console.WriteLine($"\nDELAY 429!!! Setting 429 delay time to Retry-After value of {retrySeconds} seconds");
+                        sleepTime = retrySeconds + 2; // + 2 for margin...
+                    }
+                    else
+                    {
+                        Console.WriteLine("Failed to parse 'Retry-After' header to an integer.");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("'Retry-After' header not found. Using default sleep time.");
+                }
+
+                Thread.Sleep(sleepTime * 1000); // Multiply by 1000 to convert seconds to milliseconds
+
+
+                tooManyRequests = true;
+                KILLSWITCH = true;
+
+                return (null);
+            }
+            else if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                Console.WriteLine($"404 Not Found, user must have left server recently. Skipping.");
+                return (null);
+            }
+            else
+            {
+                Console.WriteLine($"Error getting user {userId}, server {serverId}! {response.StatusCode} ({(int)response.StatusCode}) JSON: {responseBody}");
+            }
+
+            return user;
         }
 
         async static public Task<dynamic> getServer(string guildId)
         {
-            // https://discord.com/api/v9/guilds/374631527335723018
+            // https://discord.com/api/v9/guilds/[serverId]
             Server server = new Server();
 
             string url = $"https://discord.com/api/v9/guilds/{guildId}" + (boolServerPreview ? "/preview" : "");
@@ -241,7 +550,7 @@ namespace Disctalk
             {
 
                 string responseBody = await response.Content.ReadAsStringAsync();
-
+                if (debugMode) { Console.WriteLine(responseBody); }
                 var channels = JsonConvert.DeserializeObject<Channel[]>(responseBody);
 
                 foreach (var channel in channels)
@@ -249,8 +558,12 @@ namespace Disctalk
                     Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
                     foreach (var overwrite in channel.PermissionOverwrites)
                     {
-                        Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
+                        //Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
                     }
+                    channel.rawJson = JsonConvert.SerializeObject(channel);
+
+                    await SaveChannel(channel);
+
                 }
 
                 rv = true;
@@ -267,11 +580,14 @@ namespace Disctalk
 
         async static public Task<bool> viewMessages(int totalLimit = 100)
         {
+            //TODO this doesn't read inline image attachments like in #hall_of_fame. FIX!
+
             bool rv = false;
             string lastMessageId = null;
             int messagesFetched = 0;
             List<string> allMessages = new List<string>();
 
+            DateTime lastTimeStamp = DateTime.MinValue;
             int loop = 1;
             int remainingMessages = totalLimit - messagesFetched;
 
@@ -285,27 +601,43 @@ namespace Disctalk
                 {
                     url += $"&before={lastMessageId}";
                 }
+                else if (startingMsgId != -1)
+                {
+                    url += $"&before={startingMsgId}";
+                }
 
                 //Console.WriteLine(url);
 
                 prepareClient(url, new HttpMethod("GET"));
-
+                Console.WriteLine($"{messagesFetched} / {totalLimit}  {lastTimeStamp}");
                 HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
 
                 if (response.IsSuccessStatusCode)
                 {
-
-                    string responseBody = await response.Content.ReadAsStringAsync();
-                    //Console.WriteLine($"{responseBody}");
-                    var messages = JsonConvert.DeserializeObject<Message[]>(responseBody);
-
-                    foreach (var message in messages)
+                    string responseBody = "";
+                    Message[] messages = null;
+                    try
                     {
-                        DateTime date = message.Timestamp;
-                        string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
-                        //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
-                        string msg = $"Loop {loop}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
-                        allMessages.Add(msg);
+                        responseBody = await response.Content.ReadAsStringAsync();
+                        //Console.WriteLine($"{responseBody}");
+                        messages = JsonConvert.DeserializeObject<Message[]>(responseBody);
+
+                        foreach (var message in messages)
+                        {
+                            DateTime date = message.Timestamp;
+                            lastTimeStamp = date;
+                            string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
+                            //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
+                            string msg = $"{message.Id}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
+                            message.json = JsonConvert.SerializeObject(message);
+                            //Console.WriteLine($"JSON: {message.json}");
+                            SaveMessage(message.Id, message.json);
+                            allMessages.Add(msg);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"FAILED parsing message! {responseBody}. {ex.Message} {ex.StackTrace}");
                     }
 
                     messagesFetched += messages.Length;
@@ -325,7 +657,8 @@ namespace Disctalk
                 }
                 else
                 {
-                    Console.WriteLine($"ERROR happening getting messages! {url}");
+                    Console.WriteLine($"ERROR happening getting messages! {url}. {response.StatusCode} ({(int)response.StatusCode})");
+                    break;
                     rv = false;
                 }
 
@@ -349,6 +682,237 @@ namespace Disctalk
             return (rv);
         }
 
+        static public void SaveMessage(string messageId, string jsonData)
+        {
+            string delQuery = "";
+            string insertQuery = "";
+
+
+            try
+            {
+
+                delQuery = "DELETE from messages where messageId = @id";
+                using (var command = new MySqlCommand(delQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", messageId);
+                    command.ExecuteNonQuery();
+                }
+
+                var parsed = JsonConvert.DeserializeObject<Message>(jsonData);
+
+                insertQuery = @"INSERT INTO messages (messageId, channelId, authorId, authorUsername, content, timestamp, json) 
+                        VALUES 
+                        (@id, @channel, @author, @user, @content, @timestamp, @json)";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", messageId);
+                    command.Parameters.AddWithValue("@channel", parsed.ChannelId);
+                    command.Parameters.AddWithValue("@author", parsed.Author.Id);
+                    command.Parameters.AddWithValue("@user", parsed.Author.Username);
+                    command.Parameters.AddWithValue("@content", parsed.Content);
+                    command.Parameters.AddWithValue("@timestamp", parsed.Timestamp);
+                    command.Parameters.AddWithValue("@json", jsonData);
+
+                    command.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"error inserting message: del={delQuery}{messageId}{jsonData},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+            }
+        }
+
+        static public bool SaveUser(RootUserObject user, long userId = -1)
+        {
+            bool rv = false;
+
+            string delQuery = "";
+            string insertQuery = "";
+
+            if (user == null && userId != -1)
+            {
+                // User is not on the server anymore, but let's mark them in the system so we don't keep trying to find them over and over again.
+                insertQuery = @"INSERT INTO users 
+                    (userId, username, bio, legacyUsername, json) 
+                        VALUES 
+                    (@id, 'NULL', '', '', '')";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", userId);
+                    command.ExecuteNonQuery();
+                }
+                Console.WriteLine($"Adding NULL entry for userId {userId}");
+                return (true);
+            }
+
+            try
+            {
+
+                delQuery = "DELETE from users where userId = @id";
+                using (var command = new MySqlCommand(delQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", user.User.Id);
+                    command.ExecuteNonQuery();
+                }
+
+                insertQuery = @"INSERT INTO users 
+                    (userId, username, bio, legacyUsername, json) 
+                        VALUES 
+                    (@id, @user, @bio, @legacy, @json)";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", user.User.Id);
+                    command.Parameters.AddWithValue("@user", user.User.Username);
+                    command.Parameters.AddWithValue("@bio", user.User.Bio);
+                    command.Parameters.AddWithValue("@legacy", user.LegacyUsername);
+                    command.Parameters.AddWithValue("@json", user.rawJson);
+
+                    command.ExecuteNonQuery();
+                }
+
+                rv = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"error inserting User: del={delQuery}{user.User.Id}{user.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+                rv = false;
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> SaveChannel(Channel channel)
+        {
+            bool rv = false;
+
+            string delQuery = "";
+            string insertQuery = "";
+
+            try
+            {
+
+                delQuery = "DELETE from channels where channelId = @id";
+                using (var command = new MySqlCommand(delQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@id", channel.Id);
+                    command.ExecuteNonQuery();
+                }
+
+                insertQuery = @"INSERT INTO channels
+                    (serverId, channelId, type, lastMessageId, name, rateLimit, topic, position, rawJson) 
+                        VALUES 
+                    (@serverid, @channelid, @type, @lmi, @name, @rate, @topic, @pos, @json)";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@serverid", channel.GuildId);
+                    command.Parameters.AddWithValue("@channelid", channel.Id);
+                    command.Parameters.AddWithValue("@type", channel.Type);
+                    command.Parameters.AddWithValue("@lmi", channel.LastMessageId);
+                    command.Parameters.AddWithValue("@name", channel.Name);
+                    command.Parameters.AddWithValue("@rate", channel.RateLimitPerUser);
+                    command.Parameters.AddWithValue("@topic", channel.Topic);
+                    command.Parameters.AddWithValue("@pos", channel.Position);
+                    command.Parameters.AddWithValue("@json", channel.rawJson);
+
+                    command.ExecuteNonQuery();
+                }
+
+                rv = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"error inserting channel: del={delQuery}{channel.Name}{channel.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}\n{channel.Topic}");
+                rv = false;
+            }
+
+            return (rv);
+        }
+
+        static public bool SaveUserServerInfo(UserServerInfo user, long serverId = -1, long userId = -1)
+        {
+            bool rv = false;
+
+            string delQuery = "";
+            string insertQuery = "";
+
+            if (user == null && serverId != -1 && userId != -1)
+            {
+                // User is not on the server anymore, but let's mark them in the system so we don't keep trying to find them over and over again.
+                insertQuery = @"INSERT INTO usersServerInfo
+                    (serverId, userId, username, joinDate, nick, lastModified, rawJson) 
+                        VALUES 
+                    (@serverid, @userid, 'NULL', null, '', now(), '')";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@serverid", serverId);
+                    command.Parameters.AddWithValue("@userid", userId);
+                    command.ExecuteNonQuery();
+                }
+                Console.WriteLine($"Adding NULL entry for userId {userId}, serverId {serverId}");
+                return (true);
+            }
+
+            try
+            {
+
+                delQuery = "DELETE from usersServerInfo where serverId = @serverid and userId = @userid";
+                using (var command = new MySqlCommand(delQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@serverid", user.serverId);
+                    command.Parameters.AddWithValue("@userid", user.User.Id);
+                    command.ExecuteNonQuery();
+                }
+
+                insertQuery = @"INSERT INTO usersServerInfo
+                    (serverId, userId, username, joinDate, nick, lastModified, rawJson) 
+                        VALUES 
+                    (@serverid, @userid, @username, @join, @nick, now(), @json)";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@serverid", user.serverId);
+                    command.Parameters.AddWithValue("@userid", user.User.Id);
+                    command.Parameters.AddWithValue("@username", user.User.Username);
+                    command.Parameters.AddWithValue("@join", user.JoinedAt);
+                    command.Parameters.AddWithValue("@nick", user.Nick);
+                    command.Parameters.AddWithValue("@json", user.rawJson);
+
+                    command.ExecuteNonQuery();
+                }
+
+                rv = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"error inserting User {user.User.Id} server {user.serverId}: del={delQuery}{user.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+                rv = false;
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> connectToDB()
+        {
+            bool rv = false;
+            string host = Environment.GetEnvironmentVariable("MYSQLHOST");
+            string user = Environment.GetEnvironmentVariable("MYSQLUSER");
+            string pass = Environment.GetEnvironmentVariable("MYSQLPASSWORD");
+            string database = Environment.GetEnvironmentVariable("MYSQLDATABASE");
+            string connectionString = $"server={host};user={user};password={pass};database={database}";
+
+            try
+            {
+                dbConnection = new MySqlConnection(connectionString);
+                dbConnection.Open();
+                rv = true;
+            }
+            catch (Exception ex)
+            {
+                rv = false;
+            }
+
+            return (rv);
+        }
         async static public Task<bool> sendText()
         {
             bool rv = false;
@@ -398,81 +962,13 @@ namespace Disctalk
             httpRequest.Headers.TryAddWithoutValidation("X-Discord-Timezone", "America/Los_Angeles");
         }
 
-        static bool parseArgs(string[] args)
-        {
-            bool showHelp = false;
-            bool showVer = false;
-
-
-
-            var p = new OptionSet() {
-                { "messages", "View messages in channel specified", v => boolViewMessages = true },
-                { "servers", "View servers you are connected to.", v=> boolViewServers = true },
-                { "channels", "View Channels available on a server.", v=> boolViewChannels = true },
-                { "roles", "View Roles available on a server.", v=> boolViewRoles = true },
-                { "emojis", "View Emojis available on a server.", v=> boolViewEmojis = true },
-                { "stickers", "View Stickers available on a server.", v=> boolViewStickers = true },
-                { "server=", "View a specific server, pass it's Id", v=> viewServerId = v },
-                { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
-                { "msglimit=", "Total # of messages to retrieve. Default=100.", v=> totalMessageLimit = int.Parse(v) },
-                { "msgpp=", "# of message to retrieve per request.Default 100.", v=> messagesPerFetch = int.Parse(v) },
-                { "say=", "What text to send.",option => textToSend = option },
-                { "profile=", "View someone's profile", option => userId = option },
-                { "channel=", "Channel ID to send message to.",option => channelId = option },
-                { "order=", "Date Order, 'desc' or 'asc'.",option => orderBy = option },
-                { "t", "TEST MODE, don't update any database tables.", option => testMode = true },
-                { "d", "DEBUG MODE, print out extra info.", option => debugMode = true },
-                { "h|help",  "show this message and exit", v => showHelp = v != null },
-                { "v|ver|version", "Display application version.", v=> showVer = true }
-            };
-
-            try
-            {
-                p.Parse(args);
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("Invalid ARGS: " + e.Message);
-                return (false);
-            }
-
-            if (args.Length == 0)
-            {
-                Console.WriteLine("You need to pass in an argument.");
-                ShowHelp(p);
-                return (false);
-            }
-
-            if (showVer)
-            {
-                Console.WriteLine("DiscTalk, Copyright (C) 2024 Whiskerz Version " + Assembly.GetExecutingAssembly().GetName().Version);
-            }
-
-            if (showHelp)
-            {
-                ShowHelp(p);
-            }
-
-
-            if (showVer || showHelp)
-            {
-                // Don't continue to execute the program.
-                return (false);
-            }
-
-            return (true); // Successfully parsed, nothing requires program to stop.
-        }
-
-        static void ShowHelp(OptionSet p)
-        {
-            Console.WriteLine("Options:");
-            p.WriteOptionDescriptions(Console.Out);
-        }
 
         public class Message
         {
             [JsonProperty("id")]
             public string Id { get; set; }
+
+            public string json { get; set; }
 
             [JsonProperty("type")]
             public int Type { get; set; }
@@ -551,7 +1047,7 @@ namespace Disctalk
             public string GlobalName { get; set; }
 
             [JsonProperty("avatar_decoration_data")]
-            public string AvatarDecorationData { get; set; }
+            public AvatarDecorationData AvatarDecorationData { get; set; } // Changed from string to AvatarDecorationData
 
             [JsonProperty("banner_color")]
             public string BannerColor { get; set; }
@@ -723,6 +1219,10 @@ namespace Disctalk
 
             [JsonProperty("embed_channel_id")]
             public object EmbedChannelId { get; set; }
+
+
+            public string rawJson { get; set; }
+
         }
 
         // A slender version of the Server class. Contains member counts also, server class doesn't.
@@ -927,6 +1427,8 @@ namespace Disctalk
             [JsonProperty("rtc_region")]
             public string RtcRegion { get; set; }
 
+            public string rawJson { get; set; }
+
         }
 
         public class PermissionOverwrite
@@ -944,6 +1446,239 @@ namespace Disctalk
             public string Deny { get; set; }
 
         }
+
+        public class AvatarDecorationData
+        {
+            [JsonProperty("asset")]
+            public string Asset { get; set; }
+
+            [JsonProperty("sku_id")]
+            public string SkuId { get; set; }
+        }
+
+
+        //////////////////////////////////////// USER OBJECTS ///////////////////////////////
+
+        public class RootUserObject
+        {
+            [JsonProperty("user")]
+            public User User { get; set; }
+
+            [JsonProperty("connected_accounts")]
+            public List<object> ConnectedAccounts { get; set; }
+
+            [JsonProperty("premium_since")]
+            public object PremiumSince { get; set; }
+
+            [JsonProperty("premium_type")]
+            public object PremiumType { get; set; }
+
+            [JsonProperty("premium_guild_since")]
+            public object PremiumGuildSince { get; set; }
+
+            [JsonProperty("profile_themes_experiment_bucket")]
+            public int ProfileThemesExperimentBucket { get; set; }
+
+            [JsonProperty("user_profile")]
+            public UserProfile UserProfile { get; set; }
+
+            [JsonProperty("badges")]
+            public List<Badge> Badges { get; set; }
+
+            [JsonProperty("guild_badges")]
+            public List<object> GuildBadges { get; set; }
+
+            [JsonProperty("mutual_guilds")]
+            public List<MutualGuild> MutualGuilds { get; set; }
+
+            [JsonProperty("legacy_username")]
+            public string LegacyUsername { get; set; }
+
+            public string rawJson { get; set; }
+        }
+
+        public class User
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+            [JsonProperty("username")]
+            public string Username { get; set; }
+            [JsonProperty("global_name")]
+            public string GlobalName { get; set; }
+            [JsonProperty("avatar")]
+            public string Avatar { get; set; }
+            [JsonProperty("avatar_decoration_data")]
+            public object AvatarDecorationData { get; set; }
+            [JsonProperty("discriminator")]
+            public string Discriminator { get; set; }
+            [JsonProperty("public_flags")]
+            public int PublicFlags { get; set; }
+            [JsonProperty("clan")]
+            public object Clan { get; set; }
+            [JsonProperty("flags")]
+            public int Flags { get; set; }
+            [JsonProperty("banner")]
+            public object Banner { get; set; }
+            [JsonProperty("banner_color")]
+            public string BannerColor { get; set; }
+            [JsonProperty("accent_color")]
+            public int? AccentColor { get; set; }
+            [JsonProperty("bio")]
+            public string Bio { get; set; }
+        }
+
+
+        public class UserProfile
+        {
+            [JsonProperty("bio")]
+            public string Bio { get; set; }
+
+            [JsonProperty("accent_color")]
+            public int? AccentColor { get; set; }
+
+            [JsonProperty("pronouns")]
+            public string Pronouns { get; set; }
+        }
+
+        public class Badge
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("description")]
+            public string Description { get; set; }
+
+            [JsonProperty("icon")]
+            public string Icon { get; set; }
+        }
+
+        public class MutualGuild
+        {
+            [JsonProperty("id")]
+            public string Id { get; set; }
+
+            [JsonProperty("nick")]
+            public string Nick { get; set; }
+        }
+
+
+        // UserSERVERInfo
+        public class UserServerInfo
+        {
+            public long serverId { get; set; }
+            [JsonProperty("avatar")]
+            public string Avatar { get; set; }
+            [JsonProperty("communication_disabled_until")]
+            public DateTime? CommunicationDisabledUntil { get; set; }
+            [JsonProperty("flags")]
+            public int Flags { get; set; }
+            [JsonProperty("joined_at")]
+            public DateTime JoinedAt { get; set; }
+            [JsonProperty("nick")]
+            public string Nick { get; set; }
+            [JsonProperty("pending")]
+            public bool Pending { get; set; }
+            [JsonProperty("premium_since")]
+            public DateTime? PremiumSince { get; set; }
+            [JsonProperty("roles")]
+            public List<string> Roles { get; set; }
+            [JsonProperty("unusual_dm_activity_until")]
+            public string UnusualDmActivityUntil { get; set; }
+            [JsonProperty("user")]
+            public User User { get; set; }
+            [JsonProperty("mute")]
+            public bool Mute { get; set; }
+            [JsonProperty("deaf")]
+            public bool Deaf { get; set; }
+
+            public UserServerInfo()
+            {
+                Roles = new List<string>();
+            }
+
+            public string rawJson { get; set; }
+        }
+
+
+
+
+        
+
+
+        static bool parseArgs(string[] args)
+        {
+            bool showHelp = false;
+            bool showVer = false;
+
+
+
+            var p = new OptionSet() {
+                { "messages", "View messages in channel specified", v => boolViewMessages = true },
+                { "servers", "View servers you are connected to.", v=> boolViewServers = true },
+                { "channels", "View Channels available on a server.", v=> boolViewChannels = true },
+                { "roles", "View Roles available on a server.", v=> boolViewRoles = true },
+                { "emojis", "View Emojis available on a server.", v=> boolViewEmojis = true },
+                { "stickers", "View Stickers available on a server.", v=> boolViewStickers = true },
+                { "server=", "Specify server, pass it's Id", v=> viewServerId = v },
+                { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
+                { "msglimit=", "Total # of messages to retrieve. Default=100.", v=> totalMessageLimit = int.Parse(v) },
+                { "beforemsg=", "Get messages prior to this messageId.", v=> startingMsgId = long.Parse(v) },
+                { "msgpp=", "# of message to retrieve per request. Default 100.", v=> messagesPerFetch = int.Parse(v) },
+                { "say=", "What text to send.",option => textToSend = option },
+                { "saveusers", "Look up ALL user info and update the database.", v => boolUpdateUsers = true },
+                { "saveuserserverinfo", "Look up ALL server specific user info and update the database.", v => boolUpdateUserServerInfo = true },
+                { "profile=", "View someone's profile", option => userId = option },
+                { "channel=", "Channel ID to view or send message to.",option => channelId = option },
+                { "order=", "Date Order, 'desc' or 'asc'. UNIMPLEMENTED?",option => orderBy = option },
+                { "t", "TEST MODE, don't update any database tables.", option => testMode = true },
+                { "d", "DEBUG MODE, print out extra info.", option => debugMode = true },
+                { "h|help",  "show this message and exit", v => showHelp = v != null },
+                { "v|ver|version", "Display application version.", v=> showVer = true }
+            };
+
+            try
+            {
+                p.Parse(args);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Invalid ARGS: " + e.Message);
+                return (false);
+            }
+
+            if (args.Length == 0)
+            {
+                Console.WriteLine("You need to pass in an argument.");
+                ShowHelp(p);
+                return (false);
+            }
+
+            if (showVer)
+            {
+                Console.WriteLine("DiscTalk, Copyright (C) 2024 Version " + Assembly.GetExecutingAssembly().GetName().Version);
+            }
+
+            if (showHelp)
+            {
+                ShowHelp(p);
+            }
+
+
+            if (showVer || showHelp)
+            {
+                // Don't continue to execute the program.
+                return (false);
+            }
+
+            return (true); // Successfully parsed, nothing requires program to stop.
+        }
+
+        static void ShowHelp(OptionSet p)
+        {
+            Console.WriteLine("Options:");
+            p.WriteOptionDescriptions(Console.Out);
+        }
+
 
     }
 
