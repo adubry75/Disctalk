@@ -33,6 +33,7 @@ namespace Disctalk
         static public bool boolUpdateUsers = false;
         static public bool boolUpdateUserServerInfo = false;
         static public bool boolUpdateAllMessages = false;
+        static public bool boolReprocessJson = false;
         static public string viewServerId = null;
         static public string orderBy = "asc"; // anything not "desc" will imply "asc"
         static public bool testMode = false;
@@ -80,6 +81,13 @@ namespace Disctalk
             {
                 await sendText();
                 return;
+            }
+
+            if (boolReprocessJson)
+            {
+                // This is really specific coding for stuff that I missed the first time grabbing the data, which is why
+                // I saved all the rawJson in the database, so I could reprocess it without regrabbing a million API calls again!
+                await reprocessJson(long.Parse(channelId));
             }
 
             if (boolViewMessages)
@@ -216,6 +224,90 @@ namespace Disctalk
                 return;
             }
 
+        }
+
+        async static public Task<bool> reprocessJson(long channelId = -1)
+        {
+            bool rv = true;
+
+            bool emojiReactUpdate = true;
+            if (emojiReactUpdate)
+            {
+                string selectQuery = "select json from messages";
+                if (channelId != -1)
+                {
+                    selectQuery += $" where channelId = {channelId}";
+                }
+                selectQuery += " order by channelId asc, timestamp desc";
+
+                List<string> jsons = new List<string>();
+
+                Console.WriteLine($"Fetching JSON for " + (channelId == -1 ? "All Channels" : $"channelId {channelId}"));
+                Console.WriteLine($"SQL: {selectQuery}");
+
+                using (var command = new MySqlCommand(selectQuery, dbConnection))
+                {
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string json = reader["json"].ToString();
+                            jsons.Add(json);
+                        }
+                    }
+                }
+
+                foreach (var json in jsons)
+                {
+                    try
+                    {
+                        var messages = JsonConvert.DeserializeObject<List<Message>>(json);
+                        foreach (var message in messages)
+                        {
+                            await SaveMessageReactions(message);
+                        }
+                    }
+                    catch (JsonException ex)
+                    {
+                        Console.WriteLine($"Failed to parse JSON: {ex.Message}");
+                        rv = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error processing message: {ex.Message}");
+                        rv = false;
+                    }
+                }
+            }
+            return rv;
+        }
+
+
+        async static public Task<bool> SaveMessageReactions(Message message)
+        {
+            bool rv = false;
+
+            string insertQuery = @"INSERT INTO messagereacts
+                (messageId, emojiId, emojiName, emojiCount, rawJson)
+                VALUES 
+                (@msgid, @emojiid, @emojiname, @emojicount, @json)";
+
+            var command = new MySqlCommand(insertQuery, dbConnection);
+            foreach (Reaction r in message.Reactions) {
+                command.Parameters.Clear();
+
+                command.Parameters.AddWithValue("@msgid", message.Id);
+                command.Parameters.AddWithValue("@emojiid", r.Emoji.Id);
+                command.Parameters.AddWithValue("@emojiname", r.Emoji.Name);
+                command.Parameters.AddWithValue("@emojicount", r.Count);
+                command.Parameters.AddWithValue("@json", r.Emoji.rawJson );
+            
+                command.ExecuteNonQuery();
+            }
+
+
+
+            return (rv);
         }
 
         async static public Task<bool> updateAllMessages(long serverId)
@@ -1149,7 +1241,28 @@ namespace Disctalk
             [JsonProperty("components")]
             public List<Component> Components { get; set; }
 
+            public List<Reaction> Reactions { get; set; }
+
         }
+
+        public class Reaction
+        {
+            public Emoji Emoji { get; set; }
+            public int Count { get; set; }
+            public CountDetails CountDetails { get; set; }
+            public List<object> BurstColors { get; set; } // Appears to be a list of objects (possibly empty)
+            public bool MeBurst { get; set; }
+            public bool BurstMe { get; set; }
+            public bool Me { get; set; }
+            public int BurstCount { get; set; }
+        }
+
+        public class CountDetails
+        {
+            public int Burst { get; set; }
+            public int Normal { get; set; }
+        }
+
 
         public class Author
         {
@@ -1765,6 +1878,7 @@ namespace Disctalk
                 { "saveusers", "Look up ALL user info and update the database.", v => boolUpdateUsers = true },
                 { "saveuserserverinfo", "Look up ALL server specific user info and update the database.", v => boolUpdateUserServerInfo = true },
                 { "updatemessages", "Update ALL channels with current messages newer than last fetched.", v => boolUpdateAllMessages = true },
+                { "reprocessjson", "Run thru the already saved JSON in the Database and reprocess data we didn't the first time.", v => boolReprocessJson = true },
                 { "profile=", "View someone's profile", option => userId = option },
                 { "channel=", "Channel ID to view or send message to.",option => channelId = option },
                 { "order=", "Date Order, 'desc' or 'asc'. UNIMPLEMENTED?",option => orderBy = option },
