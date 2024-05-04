@@ -20,6 +20,7 @@ namespace Disctalk
         static public string textToSend = null;
         static public string userId = null;
         static public string channelId = null;
+        static public string claChannel = null; // cla = command line argument
         static public int messagesPerFetch = 100;
         static public long startingMsgId = -1;
         static public int totalMessageLimit = 100;
@@ -34,7 +35,8 @@ namespace Disctalk
         static public bool boolUpdateUserServerInfo = false;
         static public bool boolUpdateAllMessages = false;
         static public bool boolReprocessJson = false;
-        static public string viewServerId = null;
+        static public bool boolForceAll = false;
+        static public string claServerId = null;
         static public string orderBy = "asc"; // anything not "desc" will imply "asc"
         static public bool testMode = false;
         static public bool debugMode = false;
@@ -92,7 +94,21 @@ namespace Disctalk
 
             if (boolViewMessages)
             {
-                List<Message> messages = await getMessages(long.Parse(channelId), totalMessageLimit, true);
+                if (claServerId == null)
+                {
+                    Console.WriteLine("You must pass a serverID first.");
+                    return;
+                }
+
+                List<Channel> channels = await getChannels(long.Parse(claServerId));
+                Channel channelMatch = channels.FirstOrDefault(channel => channel.Name == claChannel);
+                if (channelMatch == null)
+                {
+                    Console.WriteLine($"Could not find channel '{claChannel}' for server '{claServerId}'");
+                    return;
+                }
+
+                List<Message> messages = await getMessages(channelMatch, totalMessageLimit, false);
                 foreach (Message message in messages)
                 {
                     DateTime date = message.Timestamp;
@@ -100,6 +116,7 @@ namespace Disctalk
                     //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
                     string msg = $"{message.Id}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
                     Console.WriteLine(msg);
+                    if (debugMode) { Console.WriteLine(message.json); }
                 }
 
                 return;
@@ -113,7 +130,7 @@ namespace Disctalk
 
             if (boolViewChannels)
             {
-                List<Channel> channels = await getChannels(long.Parse(viewServerId));
+                List<Channel> channels = await getChannels(long.Parse(claServerId));
                 foreach (var channel in channels)
                 {
                     Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
@@ -131,9 +148,9 @@ namespace Disctalk
 
             if (userId != null)
             {
-                if (viewServerId != null)
+                if (claServerId != null)
                 {
-                    await viewUserServerProfile(long.Parse(viewServerId), long.Parse(userId));
+                    await viewUserServerProfile(long.Parse(claServerId), long.Parse(userId));
                 }
                 else
                 {
@@ -151,38 +168,38 @@ namespace Disctalk
 
             if (boolUpdateUserServerInfo)
             {
-                if (viewServerId == null)
+                if (claServerId == null)
                 {
                     Console.WriteLine($"You need to pass in a serverId to update user Server Info.");
                     return;
                 }
 
-                await updateAllUserServerInfo(long.Parse(viewServerId));
+                await updateAllUserServerInfo(long.Parse(claServerId));
                 return;
             }
 
             if (boolUpdateAllMessages)
             {
-                if (viewServerId == null)
+                if (claServerId == null)
                 {
                     Console.WriteLine("You must pass a serverId to update messages on.");
                     return;
                 }
 
-                await updateAllMessages(long.Parse(viewServerId));
+                await updateAllMessages(long.Parse(claServerId));
 
                 return;
             }
 
-            if (boolViewEmojis && viewServerId == null)
+            if (boolViewEmojis && claServerId == null)
             {
                 Console.WriteLine("You need to specify a serverId to view emojis, dork.");
                 return;
             }
 
-            if (viewServerId != null)
+            if (claServerId != null)
             {
-                dynamic server = await getServer(viewServerId);
+                dynamic server = await getServer(claServerId);
                 Console.WriteLine($"{server.Name}: {server.Description}");
                 if (boolServerPreview)
                 {
@@ -238,7 +255,7 @@ namespace Disctalk
                 {
                     selectQuery += $" where channelId = {channelId}";
                 }
-                selectQuery += " order by channelId asc, timestamp desc";
+                selectQuery += " order by channelId asc, timestamp desc ";
 
                 List<string> jsons = new List<string>();
 
@@ -257,14 +274,20 @@ namespace Disctalk
                     }
                 }
 
+                int debugCount = 0;
                 foreach (var json in jsons)
                 {
                     try
                     {
-                        var messages = JsonConvert.DeserializeObject<List<Message>>(json);
-                        foreach (var message in messages)
+                        Message message = JsonConvert.DeserializeObject<Message>(json);
+                        rv = await SaveMessageReactions(message);
+                        if (!rv)
                         {
-                            await SaveMessageReactions(message);
+                            Console.WriteLine($"Failed to insert reactions for message {message.Id}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"SUCCESS: Reactions inserted for message {message.Id}!");
                         }
                     }
                     catch (JsonException ex)
@@ -274,9 +297,11 @@ namespace Disctalk
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Error processing message: {ex.Message}");
+                        Console.WriteLine($"Error processing message: {ex.Message}\nJSON: {json}");
                         rv = false;
                     }
+
+                    //if (debugCount++ == 10) { break; }
                 }
             }
             return rv;
@@ -287,22 +312,33 @@ namespace Disctalk
         {
             bool rv = false;
 
+            // Clear out existing data to rewrite new data.
+            string delQuery = "DELETE from messagereacts where messageId = @id";
+            var command = new MySqlCommand(delQuery, dbConnection);
+            command.Parameters.AddWithValue("@id", message.Id);
+            command.ExecuteNonQuery();
+
             string insertQuery = @"INSERT INTO messagereacts
                 (messageId, emojiId, emojiName, emojiCount, rawJson)
                 VALUES 
                 (@msgid, @emojiid, @emojiname, @emojicount, @json)";
 
-            var command = new MySqlCommand(insertQuery, dbConnection);
-            foreach (Reaction r in message.Reactions) {
-                command.Parameters.Clear();
+            command = new MySqlCommand(insertQuery, dbConnection);
 
-                command.Parameters.AddWithValue("@msgid", message.Id);
-                command.Parameters.AddWithValue("@emojiid", r.Emoji.Id);
-                command.Parameters.AddWithValue("@emojiname", r.Emoji.Name);
-                command.Parameters.AddWithValue("@emojicount", r.Count);
-                command.Parameters.AddWithValue("@json", r.Emoji.rawJson );
-            
-                command.ExecuteNonQuery();
+            if (message.Reactions != null)
+            {
+                foreach (Reaction r in message.Reactions)
+                {
+                    command.Parameters.Clear();
+
+                    command.Parameters.AddWithValue("@msgid", message.Id);
+                    command.Parameters.AddWithValue("@emojiid", r.Emoji.Id);
+                    command.Parameters.AddWithValue("@emojiname", r.Emoji.Name);
+                    command.Parameters.AddWithValue("@emojicount", r.Count);
+                    command.Parameters.AddWithValue("@json", r.Emoji.rawJson);
+
+                    command.ExecuteNonQuery();
+                }
             }
 
 
@@ -317,19 +353,31 @@ namespace Disctalk
             List<Channel> channels = await getChannels(serverId);
             int channelCount = 1;
             int totalChannels = channels.Count;
+            int totalMessagesUpdated = 0;
             foreach (Channel c in channels)
             {
+                if (   (!string.IsNullOrEmpty(channelId) && c.Id != long.Parse(channelId))
+                    || (!string.IsNullOrEmpty(claChannel) && c.Name != claChannel)  )
+                {
+                    // They passed a channelId on the command line (or channel name), so only update that one.
+                    continue;
+                }
+                
+
                 if (skipChannels.Contains(c.Id))
                 {
                     Console.WriteLine($"Skipping unreachable channel {c.Name} ({c.Id})");
+                    channelCount++;
                     continue;
                 }
 
-                Console.WriteLine($"\nUpdating Channel: {c.Name} {c.Id}... ({channelCount} / {totalChannels}");
-                List<Message> messages = await getMessages(c.Id, 999999, true);
+                Console.WriteLine($"\nUpdating Channel: {c.Name} {c.Id}... ({channelCount++} / {totalChannels})");
+                List<Message> messages = await getMessages(c, 999999, boolForceAll ? false : true);
                 Console.WriteLine($"Updated {messages.Count()} in channel {c.Name} ({c.Id})");
+                totalMessagesUpdated += messages.Count();
             }
 
+            Console.WriteLine($"\nALL CHANNELS UPDATED! {totalMessagesUpdated} total messages across all channels.");
 
             return (rv);
         }
@@ -703,7 +751,7 @@ namespace Disctalk
         {
             List<Channel> channels = new List<Channel>();
 
-            if (viewServerId == null)
+            if (claServerId == null)
             {
                 Console.WriteLine("You need to pass a --server to view channels.");
                 return (null);
@@ -734,7 +782,7 @@ namespace Disctalk
             return (channels);
         }
 
-        async static public Task<List<Message>> getMessages(long channelId, int totalLimit = 100, bool updateNew = false)
+        async static public Task<List<Message>> getMessages(Channel channel, int totalLimit = 100, bool updateNew = false)
         {
             //TODO this doesn't read inline image attachments like in #hall_of_fame. FIX!
 
@@ -747,7 +795,7 @@ namespace Disctalk
             DateTime maxDateTime = DateTime.MinValue;
             if (updateNew)
             {
-                string selectQuery = $"SELECT ifnull(max(TIMESTAMP),-1) as lastMsgDate FROM messages where channelId = {channelId}";
+                string selectQuery = $"SELECT ifnull(max(TIMESTAMP),-1) as lastMsgDate FROM messages where channelId = {channel.Id}";
                 using (var command = new MySqlCommand(selectQuery, dbConnection))
                 {
                     using (var reader = command.ExecuteReader())
@@ -780,7 +828,7 @@ namespace Disctalk
                 
                 int fetchCount = remainingMessages > messagesPerFetch ? messagesPerFetch : remainingMessages;
 
-                string url = $"https://discord.com/api/v9/channels/{channelId}/messages?limit={fetchCount}";
+                string url = $"https://discord.com/api/v9/channels/{channel.Id}/messages?limit={fetchCount}";
 
                 if (lastMessageId != null)
                 {
@@ -792,9 +840,16 @@ namespace Disctalk
                 }
 
                 //Console.WriteLine(url);
+                WriteMulticolorLine(new List<(string Text, ConsoleColor Color)> {
+                    (channel.Name, ConsoleColor.Blue),
+                    (" | ", ConsoleColor.White),
+                    ($"{messagesFetched} / {totalLimit}", ConsoleColor.Yellow),
+                    (" | ", ConsoleColor.White),
+                    (lastTimeStamp.ToString("yyyy-MM-dd HH:mm:ss"), ConsoleColor.DarkMagenta)
+                });
+                //Console.WriteLine($"{channel.Name} | {messagesFetched} / {totalLimit}  {lastTimeStamp}");
 
                 prepareClient(url, new HttpMethod("GET"));
-                Console.WriteLine($"{messagesFetched} / {totalLimit}  {lastTimeStamp}");
                 HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
 
                 if (response.IsSuccessStatusCode)
@@ -804,6 +859,7 @@ namespace Disctalk
                     try
                     {
                         responseBody = await response.Content.ReadAsStringAsync();
+                        SaveResponse(responseBody);
                         //Console.WriteLine($"{responseBody}");
                         messages = JsonConvert.DeserializeObject<Message[]>(responseBody).ToList<Message>();
 
@@ -883,9 +939,9 @@ namespace Disctalk
                 }
 
                 //Console.WriteLine($"Inserting {message.Id}: {message.Author.Username} {message.Timestamp}");
-                insertQuery = @"INSERT INTO messages (messageId, channelId, authorId, authorUsername, content, timestamp, json) 
+                insertQuery = @"INSERT INTO messages (messageId, channelId, authorId, authorUsername, content, timestamp, json, lastUpdated) 
                         VALUES 
-                        (@id, @channel, @author, @user, @content, @timestamp, @json)";
+                        (@id, @channel, @author, @user, @content, @timestamp, @json, now())";
                 using (var command = new MySqlCommand(insertQuery, dbConnection))
                 {
                     command.Parameters.AddWithValue("@id", message.Id);
@@ -903,6 +959,30 @@ namespace Disctalk
             catch (Exception ex)
             {
                 Console.WriteLine($"error inserting message: del={delQuery}{message.Id}{message.json},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+            }
+        }
+
+        static public void SaveResponse(string response)
+        {
+
+            try
+            {
+
+                //Console.WriteLine($"Inserting {message.Id}: {message.Author.Username} {message.Timestamp}");
+                string insertQuery = @"INSERT INTO rawresponses (rawResponse, lastUpdated) 
+                        VALUES 
+                        (@response, now())";
+                using (var command = new MySqlCommand(insertQuery, dbConnection))
+                {
+                    command.Parameters.AddWithValue("@response", response);
+
+                    command.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"error inserting rawResponse {response}: {ex.Message} {ex.StackTrace}");
             }
         }
 
@@ -1189,12 +1269,21 @@ namespace Disctalk
         }
 
 
+        public static void WriteMulticolorLine(List<(string Text, ConsoleColor Color)> parts)
+        {
+            foreach (var part in parts)
+            {
+                Console.ForegroundColor = part.Color;
+                Console.Write(part.Text);
+            }
+            Console.ResetColor(); // Reset the color at the end
+            Console.WriteLine();  // Move to the next line
+        }
+
         public class Message
         {
             [JsonProperty("id")]
             public string Id { get; set; }
-
-            public string json { get; set; }
 
             [JsonProperty("type")]
             public int Type { get; set; }
@@ -1229,6 +1318,15 @@ namespace Disctalk
             [JsonProperty("tts")]
             public bool Tts { get; set; }
 
+            [JsonProperty("message_reference")]
+            public MsgReference messageReference { get; set; }
+            
+            [JsonProperty("referenced_message")]
+            public Message referencedMessage { get; set; }
+
+            [JsonProperty("sticker_items")]
+            public List<MsgStickers> Stickers { get; set; } 
+
             [JsonProperty("timestamp")]
             public DateTime Timestamp { get; set; }
 
@@ -1241,8 +1339,27 @@ namespace Disctalk
             [JsonProperty("components")]
             public List<Component> Components { get; set; }
 
+            [JsonProperty("reactions")]
             public List<Reaction> Reactions { get; set; }
 
+
+
+            public string json { get; set; }
+
+        }
+
+        public class MsgStickers 
+        {
+            public string id { get; set; }
+            public string name { get; set; }
+            public int format_type { get; set; }
+        }
+
+        public class MsgReference
+        {
+            public string channel_id { get; set; }
+            public string message_id { get; set; }
+            public string guild_id { get; set; }
         }
 
         public class Reaction
@@ -1306,17 +1423,71 @@ namespace Disctalk
 
         public class Attachment
         {
-            // Define attachment properties based on your API documentation
+            public string id { get; set; }
+            public string filename { get; set; }
+            public long size { get; set; }
+            public string url { get; set; }
+            public string proxy_url { get; set; }
+            public int width { get; set; }
+            public int height { get; set; }
+            public string content_type { get; set; }
+            public int content_scan_version { get; set; }
+            public string placeholder { get; set; }
+            public int placeholder_version { get; set; }
         }
 
         public class Embed
         {
-            // Define embed properties based on your API documentation
+            public string type { get; set; }
+            public string url { get; set; }
+            public EmbedProvider provider { get; set; }
+            public EmbedThumbnail thumbnail { get; set; }
+            public EmbedVideo video { get; set; }
+            public int content_scan_version { get; set; }
+        }
+
+        public class EmbedProvider
+        {
+            public string name { get; set; }
+            public string url { get; set; }
+        }
+
+        public class EmbedVideo
+        {
+            public string url { get; set; }
+            public string proxy_url { get; set; }
+            public int width { get; set; }
+            public int height { get; set; }
+            public string placeholder { get; set; }
+            public int placeholder_version { get; set; }
+        }
+
+        public class EmbedThumbnail
+        {
+            public string url { get; set; }
+            public string proxy_url { get; set; }
+            public int width { get; set; }
+            public int height { get; set; }
+            public string placeholder { get; set; }
+            public int placeholder_version { get; set; }
         }
 
         public class UserMention
         {
-            // Define user mention properties based on your API documentation
+            public string id { get; set; }
+            public string username { get; set; }
+            public string avatar { get; set; }
+            public string discriminator { get; set; }
+            public long public_flags { get; set; }
+            public long flags { get; set; }
+            public string banner { get; set; }
+            public string accent_color { get; set; }
+            public string global_name { get; set; }
+            
+            [JsonProperty("avatar_decoration_data")]
+            public AvatarDecorationData AvatarDecorationData { get; set; } // Changed from string to AvatarDecorationData
+            public string banner_color { get; set; }
+            public string clan { get; set; }
         }
 
         public class Component
@@ -1758,7 +1929,8 @@ namespace Disctalk
             [JsonProperty("avatar")]
             public string Avatar { get; set; }
             [JsonProperty("avatar_decoration_data")]
-            public object AvatarDecorationData { get; set; }
+            public AvatarDecorationData AvatarDecorationData { get; set; }
+
             [JsonProperty("discriminator")]
             public string Discriminator { get; set; }
             [JsonProperty("public_flags")]
@@ -1869,7 +2041,7 @@ namespace Disctalk
                 { "roles", "View Roles available on a server.", v=> boolViewRoles = true },
                 { "emojis", "View Emojis available on a server.", v=> boolViewEmojis = true },
                 { "stickers", "View Stickers available on a server.", v=> boolViewStickers = true },
-                { "server=", "Specify server, pass it's Id", v=> viewServerId = v },
+                { "server=", "Specify server, pass it's Id", v=> claServerId = v },
                 { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
                 { "msglimit=", "Total # of messages to retrieve. Default=100.", v=> totalMessageLimit = int.Parse(v) },
                 { "beforemsg=", "Get messages prior to this messageId.", v=> startingMsgId = long.Parse(v) },
@@ -1878,9 +2050,11 @@ namespace Disctalk
                 { "saveusers", "Look up ALL user info and update the database.", v => boolUpdateUsers = true },
                 { "saveuserserverinfo", "Look up ALL server specific user info and update the database.", v => boolUpdateUserServerInfo = true },
                 { "updatemessages", "Update ALL channels with current messages newer than last fetched.", v => boolUpdateAllMessages = true },
+                { "forceall", "Reset last updated and force update of ALL messages", v => boolForceAll = true },
                 { "reprocessjson", "Run thru the already saved JSON in the Database and reprocess data we didn't the first time.", v => boolReprocessJson = true },
                 { "profile=", "View someone's profile", option => userId = option },
-                { "channel=", "Channel ID to view or send message to.",option => channelId = option },
+                { "channelId=", "Channel ID to view or send message to.",option => channelId = option },
+                { "channel=", "Channel name to view or send message to.",option => claChannel = option },
                 { "order=", "Date Order, 'desc' or 'asc'. UNIMPLEMENTED?",option => orderBy = option },
                 { "t", "TEST MODE, don't update any database tables.", option => testMode = true },
                 { "d", "DEBUG MODE, print out extra info.", option => debugMode = true },
@@ -1903,6 +2077,11 @@ namespace Disctalk
                 Console.WriteLine("You need to pass in an argument.");
                 ShowHelp(p);
                 return (false);
+            }
+
+            if (debugMode)
+            {
+                Console.WriteLine("DEBUG MODE ON!");
             }
 
             if (showVer)
