@@ -89,7 +89,14 @@ namespace Disctalk
             {
                 // This is really specific coding for stuff that I missed the first time grabbing the data, which is why
                 // I saved all the rawJson in the database, so I could reprocess it without regrabbing a million API calls again!
-                await reprocessJson(long.Parse(channelId));
+                if (channelId != null)
+                {
+                    await reprocessJson(long.Parse(channelId));
+                }
+                else
+                {
+                    await reprocessJson();
+                }
             }
 
             if (boolViewMessages)
@@ -247,15 +254,15 @@ namespace Disctalk
         {
             bool rv = true;
 
-            bool emojiReactUpdate = true;
+            bool emojiReactUpdate = true; // hardcoded for testing
             if (emojiReactUpdate)
             {
-                string selectQuery = "select json from messages";
+                string selectQuery = "select m.json, c.name from messages m left outer join channels c on m.channelId = c.channelId";
                 if (channelId != -1)
                 {
-                    selectQuery += $" where channelId = {channelId}";
+                    selectQuery += $" where m.channelId = {channelId}";
                 }
-                selectQuery += " order by channelId asc, timestamp desc ";
+                selectQuery += " order by m.channelId asc, m.timestamp desc ";
 
                 List<string> jsons = new List<string>();
 
@@ -264,6 +271,7 @@ namespace Disctalk
 
                 using (var command = new MySqlCommand(selectQuery, dbConnection))
                 {
+                    command.CommandTimeout = 180; // Timeout in seconds, adjust as needed
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
@@ -275,72 +283,100 @@ namespace Disctalk
                 }
 
                 int debugCount = 0;
+                int loopCount = 0;
+                int jsonCount = jsons.Count();
+                int failCount = 0;
+                int successCount = 0;
+                int noReactionCount = 0;
                 foreach (var json in jsons)
                 {
                     try
                     {
                         Message message = JsonConvert.DeserializeObject<Message>(json);
-                        rv = await SaveMessageReactions(message);
-                        if (!rv)
+                        int status = await SaveMessageReactions(message);
+                        if (status == 2)
                         {
-                            Console.WriteLine($"Failed to insert reactions for message {message.Id}");
+                            failCount++;
+                            Console.WriteLine($"   Failed to insert reactions for message {message.Id}. {loopCount++} / {jsonCount}");
                         }
-                        else
+                        else if (status == 1)
                         {
-                            Console.WriteLine($"SUCCESS: Reactions inserted for message {message.Id}!");
+                            successCount++;
+                            Console.WriteLine($"   SUCCESS: Reactions inserted for message {message.Id}! {loopCount++} / {jsonCount}");
+                        }
+                        else if (status == 0)
+                        {
+                            noReactionCount++;
+                            Console.WriteLine($"   There were no reactions on message {message.Id}! {loopCount++} / {jsonCount}");
                         }
                     }
                     catch (JsonException ex)
                     {
-                        Console.WriteLine($"Failed to parse JSON: {ex.Message}");
+                        Console.WriteLine($"   Failed to parse JSON: {ex.Message}");
                         rv = false;
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Error processing message: {ex.Message}\nJSON: {json}");
+                        Console.WriteLine($"   Error processing message: {ex.Message}\nJSON: {json}");
                         rv = false;
                     }
 
                     //if (debugCount++ == 10) { break; }
                 }
+
+                Console.WriteLine($"{failCount} failed inserts, {successCount} good inserts, {noReactionCount} NOOPS.");
+
             }
             return rv;
         }
 
 
-        async static public Task<bool> SaveMessageReactions(Message message)
+        async static public Task<int> SaveMessageReactions(Message message)
         {
-            bool rv = false;
+            int rv = 0; // message had no reactions
 
-            // Clear out existing data to rewrite new data.
-            string delQuery = "DELETE from messagereacts where messageId = @id";
-            var command = new MySqlCommand(delQuery, dbConnection);
-            command.Parameters.AddWithValue("@id", message.Id);
-            command.ExecuteNonQuery();
+            try
+            {
+                // Clear out existing data to rewrite new data.
+                string delQuery = "DELETE from messagereacts where messageId = @id";
+                var command = new MySqlCommand(delQuery, dbConnection);
+                command.Parameters.AddWithValue("@id", message.Id);
+                command.ExecuteNonQuery();
 
-            string insertQuery = @"INSERT INTO messagereacts
+                string insertQuery = @"INSERT INTO messagereacts
                 (messageId, emojiId, emojiName, emojiCount, rawJson)
                 VALUES 
                 (@msgid, @emojiid, @emojiname, @emojicount, @json)";
 
-            command = new MySqlCommand(insertQuery, dbConnection);
+                command = new MySqlCommand(insertQuery, dbConnection);
 
-            if (message.Reactions != null)
-            {
-                foreach (Reaction r in message.Reactions)
+                if (message.Reactions != null)
                 {
-                    command.Parameters.Clear();
+                    foreach (Reaction r in message.Reactions)
+                    {
+                        command.Parameters.Clear();
 
-                    command.Parameters.AddWithValue("@msgid", message.Id);
-                    command.Parameters.AddWithValue("@emojiid", r.Emoji.Id);
-                    command.Parameters.AddWithValue("@emojiname", r.Emoji.Name);
-                    command.Parameters.AddWithValue("@emojicount", r.Count);
-                    command.Parameters.AddWithValue("@json", r.Emoji.rawJson);
+                        command.Parameters.AddWithValue("@msgid", message.Id);
+                        command.Parameters.AddWithValue("@emojiid", r.Emoji.Id);
+                        command.Parameters.AddWithValue("@emojiname", r.Emoji.Name);
+                        command.Parameters.AddWithValue("@emojicount", r.Count);
+                        command.Parameters.AddWithValue("@json", r.Emoji.rawJson);
 
-                    command.ExecuteNonQuery();
+                        command.ExecuteNonQuery();
+                    }
+                    rv = 1; // successful update!
                 }
-            }
+                else
+                {
+                    rv = 0;
+                }
 
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed inserting reaction to message {message.Id} {ex.Message}");
+                rv = 2; // Failure updating valid reactions
+            }
 
 
             return (rv);
