@@ -1,5 +1,5 @@
 ﻿using Mono.Options;
-using MySql.Data.MySqlClient;
+//using MySql.Data.MySqlClient;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -10,6 +10,8 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using MySqlConnector;
+using System.Data;
 
 namespace Disctalk
 {
@@ -29,6 +31,7 @@ namespace Disctalk
         static public bool boolViewChannels = false;
         static public bool boolViewRoles = false;
         static public bool boolViewEmojis = false;
+        static public bool boolViewEmojiReacts = false;
         static public bool boolViewStickers = false;
         static public bool boolServerPreview = false;
         static public bool boolUpdateUsers = false;
@@ -36,6 +39,7 @@ namespace Disctalk
         static public bool boolUpdateAllMessages = false;
         static public bool boolReprocessJson = false;
         static public bool boolForceAll = false;
+        static public bool boolWordCount = false;
         static public string claServerId = null;
         static public string orderBy = "asc"; // anything not "desc" will imply "asc"
         static public bool testMode = false;
@@ -97,6 +101,14 @@ namespace Disctalk
                 {
                     await reprocessJson();
                 }
+
+                return;
+            }
+
+            if (boolWordCount)
+            {
+                await updateWordCounts();
+                return;
             }
 
             if (boolViewMessages)
@@ -254,15 +266,15 @@ namespace Disctalk
         {
             bool rv = true;
 
-            bool emojiReactUpdate = true; // hardcoded for testing
-            if (emojiReactUpdate)
+            if (boolViewEmojiReacts)
             {
-                string selectQuery = "select m.json, c.name from messages m left outer join channels c on m.channelId = c.channelId";
+                string selectQuery = "select m.json from messages m left outer join channels c on m.channelId = c.channelId where 1=1";
                 if (channelId != -1)
                 {
-                    selectQuery += $" where m.channelId = {channelId}";
+                    selectQuery += $" and m.channelId = {channelId}";
                 }
-                selectQuery += " order by m.channelId asc, m.timestamp desc ";
+                selectQuery += " and JSON LIKE '%\"reactions\":[%'";
+                //selectQuery += " order by m.channelId asc, m.timestamp desc ";
 
                 List<string> jsons = new List<string>();
 
@@ -282,33 +294,73 @@ namespace Disctalk
                     }
                 }
 
+                // Clear out existing data to rewrite new data.
+                if (channelId != -1) {
+                    string delQuery = "DELETE from messagereacts where channelId = @id";
+                    var command = new MySqlCommand(delQuery, dbConnection);
+                    command.Parameters.AddWithValue("@id", channelId );
+                    command.ExecuteNonQuery();
+                }
+                else
+                {
+                    string delQuery = "truncate table messagereacts";
+                    var command = new MySqlCommand(delQuery, dbConnection);
+                    command.ExecuteNonQuery();
+                }
+
+                // Define dataTable we're going to write to in MEMORY, and bulk copy that table to MySql later.
+                DataTable dt = new DataTable("messagereacts");
+                dt.Columns.Add("messageId", typeof(long));
+                dt.Columns.Add("emojiId", typeof(long));
+                dt.Columns.Add("emojiName", typeof(string));
+                dt.Columns.Add("emojiCount", typeof(int));
+                dt.Columns.Add("rawJson", typeof(string));
+
                 int debugCount = 0;
                 int loopCount = 0;
                 int jsonCount = jsons.Count();
                 int failCount = 0;
                 int successCount = 0;
+                int totalReactsCount = 0;
                 int noReactionCount = 0;
                 foreach (var json in jsons)
                 {
                     try
                     {
                         Message message = JsonConvert.DeserializeObject<Message>(json);
-                        int status = await SaveMessageReactions(message);
-                        if (status == 2)
-                        {
-                            failCount++;
-                            Console.WriteLine($"   Failed to insert reactions for message {message.Id}. {loopCount++} / {jsonCount}");
-                        }
-                        else if (status == 1)
-                        {
-                            successCount++;
-                            Console.WriteLine($"   SUCCESS: Reactions inserted for message {message.Id}! {loopCount++} / {jsonCount}");
-                        }
-                        else if (status == 0)
+                        if (message.Reactions == null)
                         {
                             noReactionCount++;
-                            Console.WriteLine($"   There were no reactions on message {message.Id}! {loopCount++} / {jsonCount}");
+                            loopCount++;
+                            if (loopCount++ % 500 == 0)
+                            {
+                                Console.WriteLine($"   NOOP {message.Id}. {loopCount} / {jsonCount}");
+                            }
+                            //Console.WriteLine($"   There were no reactions on message {message.Id}! {loopCount++} / {jsonCount}");
+                            continue;
                         }
+
+                        (bool insertRv, int countInserted) = await SaveMessageReactions(message, dt);
+
+                        if (!insertRv)
+                        {
+                            failCount++;
+                            if (loopCount++ % 500 == 0)
+                            {
+                                Console.WriteLine($"   Failed to insert reactions for message {message.Id}. {loopCount} / {jsonCount}");
+                            }
+                        }
+                        else
+                        {
+                            successCount++;
+                            totalReactsCount += countInserted;
+                            if (loopCount++ % 500 == 0)
+                            {
+                                Console.WriteLine($"   SUCCESS: Reactions inserted for message {message.Id}! {loopCount} / {jsonCount}");
+                            }
+
+                        }
+                        
                     }
                     catch (JsonException ex)
                     {
@@ -324,62 +376,136 @@ namespace Disctalk
                     //if (debugCount++ == 10) { break; }
                 }
 
-                Console.WriteLine($"{failCount} failed inserts, {successCount} good inserts, {noReactionCount} NOOPS.");
+                Console.WriteLine($"{failCount} failed inserts, {successCount} good inserts ({totalReactsCount} reacts), {noReactionCount} NOOPS.");
 
+                MySqlBulkCopy bulkCopy = new MySqlBulkCopy(dbConnection);
+                bulkCopy.DestinationTableName = "messagereacts";
+                var result = bulkCopy.WriteToServer(dt);
+                Console.WriteLine($"BulkCopy Result: {result.RowsInserted}, {result.Warnings}");
             }
+            else
+            {
+                Console.WriteLine($"You didn't specify what to reprocess. Pass -emojireacts to update reaction counts.");
+                rv = false;
+            }
+
             return rv;
         }
 
 
-        async static public Task<int> SaveMessageReactions(Message message)
+        async static public Task<int> updateWordCounts()
         {
-            int rv = 0; // message had no reactions
+            int rv = 0;
+
+            string selectQuery = @"SELECT MessageId, ChannelId, AuthorId, AuthorUsername, Content, Timestamp 
+                FROM Messages 
+                where channelId = 394388671459229696";
+            string insertQuery = @"INSERT INTO Words 
+                (Word, MessageId, ChannelId, AuthorId, AuthorUsername, Timestamp) 
+                VALUES 
+                (@Word, @MessageId, @ChannelId, @AuthorId, @AuthorUsername, @Timestamp)";
+
+            int insertCount = 0;
+
+            // Define a list to hold all messages from the database
+            List<Tuple<long, long, long, string, string, DateTime>> messages = new List<Tuple<long, long, long, string, string, DateTime>>();
+
+            // Fetch messages
+            using (var command = new MySqlCommand(selectQuery, dbConnection))
+            {
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long messageId = reader.GetInt64(0);
+                        long channelId = reader.GetInt64(1);
+                        long authorId = reader.GetInt64(2);
+                        string authorUsername = reader.GetString(3);
+                        string content = reader.GetString(4);
+                        DateTime timestamp = reader.GetDateTime(5);
+
+                        messages.Add(new Tuple<long, long, long, string, string, DateTime>(messageId, channelId, authorId, authorUsername, content, timestamp));
+                    }
+                }
+            }
+
+            // Now the reader is closed, start inserting
+            int msgCount = 0;
+            int totalMsg = messages.Count();
+            foreach (var message in messages)
+            {
+                long messageId = message.Item1;
+                long channelId = message.Item2;
+                long authorId = message.Item3;
+                string authorUsername = message.Item4;
+                string content = message.Item5;
+                DateTime timestamp = message.Item6;
+
+                // Split content into words, considering spaces, tabs, and returns
+                string[] delimiters = new string[] { " ", "\t", "\n", "\r", "\r\n" };
+                string[] words = content.Split(delimiters, StringSplitOptions.RemoveEmptyEntries);
+
+
+                foreach (var word in words)
+                {
+                    using (var insertCommand = new MySqlCommand(insertQuery, dbConnection))
+                    {
+                        insertCommand.Parameters.AddWithValue("@Word", word);
+                        insertCommand.Parameters.AddWithValue("@MessageId", messageId);
+                        insertCommand.Parameters.AddWithValue("@ChannelId", channelId);
+                        insertCommand.Parameters.AddWithValue("@AuthorId", authorId);
+                        insertCommand.Parameters.AddWithValue("@AuthorUsername", authorUsername);
+                        insertCommand.Parameters.AddWithValue("@Timestamp", timestamp);
+
+                        //Console.WriteLine($"     Inserting word '{word}'.");
+                        await insertCommand.ExecuteNonQueryAsync();
+                        insertCount++;
+                    }
+                }
+                Console.WriteLine($"Progress: {msgCount++} / {totalMsg}");
+            }
+
+            Console.WriteLine($"{insertCount} words have been successfully extracted and inserted.");
+
+            return rv;
+        }
+
+
+        async static public Task<(bool, int)> SaveMessageReactions(Message message, DataTable dt)
+        {
+            bool rv = false;
+
+            int countInserted = 0;
 
             try
             {
-                // Clear out existing data to rewrite new data.
-                string delQuery = "DELETE from messagereacts where messageId = @id";
-                var command = new MySqlCommand(delQuery, dbConnection);
-                command.Parameters.AddWithValue("@id", message.Id);
-                command.ExecuteNonQuery();
-
-                string insertQuery = @"INSERT INTO messagereacts
-                (messageId, emojiId, emojiName, emojiCount, rawJson)
-                VALUES 
-                (@msgid, @emojiid, @emojiname, @emojicount, @json)";
-
-                command = new MySqlCommand(insertQuery, dbConnection);
-
                 if (message.Reactions != null)
                 {
                     foreach (Reaction r in message.Reactions)
                     {
-                        command.Parameters.Clear();
+                        DataRow row = dt.NewRow();
 
-                        command.Parameters.AddWithValue("@msgid", message.Id);
-                        command.Parameters.AddWithValue("@emojiid", r.Emoji.Id);
-                        command.Parameters.AddWithValue("@emojiname", r.Emoji.Name);
-                        command.Parameters.AddWithValue("@emojicount", r.Count);
-                        command.Parameters.AddWithValue("@json", r.Emoji.rawJson);
+                        row["messageId"] = message.Id;
+                        row["emojiId"] = r.Emoji.Id == null ? DBNull.Value : (object)r.Emoji.Id;
+                        row["emojiName"] = r.Emoji.Name;
+                        row["emojiCount"] = r.Count;    
+                        row["rawJson"] = r.Emoji.rawJson;
 
-                        command.ExecuteNonQuery();
+                        dt.Rows.Add(row);
+                        countInserted++;
                     }
-                    rv = 1; // successful update!
-                }
-                else
-                {
-                    rv = 0;
+                    rv = true;
                 }
 
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed inserting reaction to message {message.Id} {ex.Message}");
-                rv = 2; // Failure updating valid reactions
+                rv = false;
             }
 
 
-            return (rv);
+            return (rv, countInserted);
         }
 
         async static public Task<bool> updateAllMessages(long serverId)
@@ -1240,7 +1366,7 @@ namespace Disctalk
             string user = Environment.GetEnvironmentVariable("MYSQLUSER");
             string pass = Environment.GetEnvironmentVariable("MYSQLPASSWORD");
             string database = Environment.GetEnvironmentVariable("MYSQLDATABASE");
-            string connectionString = $"server={host};user={user};password={pass};database={database}";
+            string connectionString = $"server={host};user={user};password={pass};database={database};AllowLoadLocalInfile=true;";
 
             try
             {
@@ -2076,6 +2202,7 @@ namespace Disctalk
                 { "channels", "View Channels available on a server.", v=> boolViewChannels = true },
                 { "roles", "View Roles available on a server.", v=> boolViewRoles = true },
                 { "emojis", "View Emojis available on a server.", v=> boolViewEmojis = true },
+                { "emojireacts", "Look at emoji reactions.", v=> boolViewEmojiReacts = true },
                 { "stickers", "View Stickers available on a server.", v=> boolViewStickers = true },
                 { "server=", "Specify server, pass it's Id", v=> claServerId = v },
                 { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
@@ -2088,6 +2215,7 @@ namespace Disctalk
                 { "updatemessages", "Update ALL channels with current messages newer than last fetched.", v => boolUpdateAllMessages = true },
                 { "forceall", "Reset last updated and force update of ALL messages", v => boolForceAll = true },
                 { "reprocessjson", "Run thru the already saved JSON in the Database and reprocess data we didn't the first time.", v => boolReprocessJson = true },
+                { "wordcount", "Do a word count of all messages for the stats table.", v => boolWordCount = true },
                 { "profile=", "View someone's profile", option => userId = option },
                 { "channelId=", "Channel ID to view or send message to.",option => channelId = option },
                 { "channel=", "Channel name to view or send message to.",option => claChannel = option },
