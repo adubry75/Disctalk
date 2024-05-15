@@ -79,185 +79,224 @@ namespace Disctalk
 
         static async Task Main(string[] args)
         {
-            if (!parseArgs(args)) { return; }
-
-            await connectToDB();
-
-            if (textToSend != null)
+            try
             {
-                await sendText();
-                return;
-            }
 
-            if (boolReprocessJson)
-            {
-                // This is really specific coding for stuff that I missed the first time grabbing the data, which is why
-                // I saved all the rawJson in the database, so I could reprocess it without regrabbing a million API calls again!
-                if (channelId != null)
+                if (!parseArgs(args)) { return; }
+
+                bool dbRv = await connectToDB();
+                if (!dbRv)
                 {
-                    await reprocessJson(long.Parse(channelId));
-                }
-                else
-                {
-                    await reprocessJson();
-                }
-
-                return;
-            }
-
-            if (boolWordCount)
-            {
-                await updateWordCounts();
-                return;
-            }
-
-            if (boolViewMessages)
-            {
-                if (claServerId == null)
-                {
-                    Console.WriteLine("You must pass a serverID first.");
+                    string host = Environment.GetEnvironmentVariable("MYSQLHOST");
+                    string user = Environment.GetEnvironmentVariable("MYSQLUSER");
+                    string pass = Environment.GetEnvironmentVariable("MYSQLPASSWORD");
+                    string database = Environment.GetEnvironmentVariable("MYSQLDATABASE");
+                    Console.WriteLine($"FAILED TO CONNECT TO DATABASE! {host},{user},{pass},{database}");
+                    Thread.Sleep(5000);
                     return;
                 }
 
-                List<Channel> channels = await getChannels(long.Parse(claServerId));
-                Channel channelMatch = channels.FirstOrDefault(channel => channel.Name == claChannel);
-                if (channelMatch == null)
+                if (textToSend != null)
                 {
-                    Console.WriteLine($"Could not find channel '{claChannel}' for server '{claServerId}'");
+                    await sendText();
                     return;
                 }
 
-                List<Message> messages = await getMessages(channelMatch, totalMessageLimit, false);
-                foreach (Message message in messages)
+                if (boolReprocessJson)
                 {
-                    DateTime date = message.Timestamp;
-                    string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
-                    //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
-                    string msg = $"{message.Id}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
-                    Console.WriteLine(msg);
-                    if (debugMode) { Console.WriteLine(message.json); }
-                }
-
-                return;
-            }
-
-            if (boolViewServers)
-            {
-                await viewServers();
-                return;
-            }
-
-            if (boolViewChannels)
-            {
-                List<Channel> channels = await getChannels(long.Parse(claServerId));
-                foreach (var channel in channels)
-                {
-                    Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
-                    foreach (var overwrite in channel.PermissionOverwrites)
+                    // This is really specific coding for stuff that I missed the first time grabbing the data, which is why
+                    // I saved all the rawJson in the database, so I could reprocess it without regrabbing a million API calls again!
+                    if (channelId != null)
                     {
-                        //Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
+                        await reprocessJson(long.Parse(channelId));
                     }
-                    channel.rawJson = JsonConvert.SerializeObject(channel);
+                    else
+                    {
+                        await reprocessJson();
+                    }
 
-                    await SaveChannel(channel);
-
+                    return;
                 }
-                return;
-            }
 
-            if (userId != null)
-            {
+                if (boolWordCount)
+                {
+                    await updateWordCounts();
+                    return;
+                }
+
+                if (boolViewMessages)
+                {
+                    if (claServerId == null)
+                    {
+                        Console.WriteLine("You must pass a serverID first.");
+                        return;
+                    }
+
+                    List<Channel> channels = await getChannels(long.Parse(claServerId));
+                    Channel channelMatch = channels.FirstOrDefault(channel => channel.Name == claChannel);
+                    if (channelMatch == null)
+                    {
+                        Console.WriteLine($"Could not find channel '{claChannel}' for server '{claServerId}'. Pass in the channel NAME not Id.");
+                        foreach (var c in channels)
+                        {
+                            Console.WriteLine($"{c.Id} - {c.Name}");
+                        }
+                        return;
+                    }
+
+                    List<Message> messages = await getMessages(channelMatch, totalMessageLimit, false);
+                    foreach (Message message in messages)
+                    {
+                        DateTime date = message.Timestamp;
+                        string dateNice = date.ToString("yyyy-MM-dd HH:mm:ss");
+                        //TODO replace username with global_name if available. orr...??? is there a server-specific username available?! TODOODOO!
+                        string msg = $"{message.Id}|{dateNice} {message.Author.Username} ({message.Author.Id}): {message.Content}";
+                        Console.WriteLine(msg);
+                        if (debugMode) { Console.WriteLine(message.json); }
+                    }
+
+                    return;
+                }
+
+                if (boolViewServers)
+                {
+                    await viewServers();
+                    return;
+                }
+
+                if (boolViewChannels)
+                {
+                    List<Channel> channels = await getChannels(long.Parse(claServerId));
+                    if (channels == null)
+                    {
+                        Console.WriteLine("Error getting channels, dying.");
+                        return;
+                    }
+
+                    foreach (var channel in channels)
+                    {
+                        Console.WriteLine($"{channel.Id}: {channel.Name}. Rate: {channel.RateLimitPerUser}. ");
+                        foreach (var overwrite in channel.PermissionOverwrites)
+                        {
+                            //Console.WriteLine($"   {overwrite.Type}: Allow {overwrite.Allow}, Deny {overwrite.Deny}");
+                        }
+                        channel.rawJson = JsonConvert.SerializeObject(channel);
+
+                        await SaveChannel(channel);
+
+                    }
+                    return;
+                }
+
+                if (userId != null)
+                {
+                    if (claServerId != null)
+                    {
+                        await viewUserServerProfile(long.Parse(claServerId), long.Parse(userId));
+                    }
+                    else
+                    {
+                        await viewUserProfile(long.Parse(userId));
+                    }
+
+                    return;
+                }
+
+                if (boolUpdateUsers)
+                {
+                    await updateAllUsers();
+                    return;
+                }
+
+                if (boolUpdateUserServerInfo)
+                {
+                    if (claServerId == null)
+                    {
+                        Console.WriteLine($"You need to pass in a serverId to update user Server Info.");
+                        return;
+                    }
+
+                    await updateAllUserServerInfo(long.Parse(claServerId));
+                    return;
+                }
+
+                if (boolUpdateAllMessages)
+                {
+                    if (claServerId == null)
+                    {
+                        Console.WriteLine("You must pass a serverId to update messages on.");
+                        return;
+                    }
+
+                    await updateAllMessages(long.Parse(claServerId));
+
+                    return;
+                }
+
+                if (boolViewEmojis && claServerId == null)
+                {
+                    Console.WriteLine("You need to specify a serverId to view emojis, dork.");
+                    return;
+                }
+
                 if (claServerId != null)
                 {
-                    await viewUserServerProfile(long.Parse(claServerId), long.Parse(userId));
-                }
-                else
-                {
-                    await viewUserProfile(long.Parse(userId));
-                }
-
-                return;
-            }
-
-            if (boolUpdateUsers)
-            {
-                await updateAllUsers();
-                return;
-            }
-
-            if (boolUpdateUserServerInfo)
-            {
-                if (claServerId == null)
-                {
-                    Console.WriteLine($"You need to pass in a serverId to update user Server Info.");
-                    return;
-                }
-
-                await updateAllUserServerInfo(long.Parse(claServerId));
-                return;
-            }
-
-            if (boolUpdateAllMessages)
-            {
-                if (claServerId == null)
-                {
-                    Console.WriteLine("You must pass a serverId to update messages on.");
-                    return;
-                }
-
-                await updateAllMessages(long.Parse(claServerId));
-
-                return;
-            }
-
-            if (boolViewEmojis && claServerId == null)
-            {
-                Console.WriteLine("You need to specify a serverId to view emojis, dork.");
-                return;
-            }
-
-            if (claServerId != null)
-            {
-                dynamic server = await getServer(claServerId);
-                Console.WriteLine($"{server.Name}: {server.Description}");
-                if (boolServerPreview)
-                {
-                    Console.WriteLine($"{server.MemberCount} members, {server.PresenceCount} presence.");
-                }
-                else
-                {
-                    // Roles aren't available view Preview.
-                    if (boolViewRoles)
+                    dynamic server = await getServer(claServerId);
+                    Console.WriteLine($"{server.Name}: {server.Description}");
+                    if (boolServerPreview)
                     {
-                        foreach (var role in server.Roles)
+                        Console.WriteLine($"{server.MemberCount} members, {server.PresenceCount} presence.");
+                    }
+                    else
+                    {
+                        // Roles aren't available view Preview.
+                        if (boolViewRoles)
                         {
-                            Console.WriteLine($"{role.Name}: {role.Description}");
+                            foreach (var role in server.Roles)
+                            {
+                                Console.WriteLine($"{role.Name}: {role.Description}");
+                            }
                         }
                     }
-                }
 
-                // Emojis and Stickers are available in verbose and preview modes.
-                if (boolViewEmojis)
-                {
-                    foreach (Emoji emoji in server.Emojis)
+                    // Emojis and Stickers are available in verbose and preview modes.
+                    if (boolViewEmojis)
                     {
-                        emoji.rawJson = JsonConvert.SerializeObject(emoji);
-                        Console.WriteLine($"{emoji.Name}");
+                        foreach (Emoji emoji in server.Emojis)
+                        {
+                            emoji.rawJson = JsonConvert.SerializeObject(emoji);
+                            Console.WriteLine($"{emoji.Name}");
 
-                        await SaveEmoji(emoji);
+                            await SaveEmoji(emoji);
+                        }
                     }
-                }
 
-                if (boolViewStickers)
-                {
-                    foreach (var sticker in server.Stickers)
+                    if (boolViewStickers)
                     {
-                        Console.WriteLine($"{sticker.Name}");
+                        foreach (var sticker in server.Stickers)
+                        {
+                            Console.WriteLine($"{sticker.Name}");
+                        }
                     }
+
+
+                    return;
                 }
 
-
-                return;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"main() died with unhandled exception: {ex.Message} {ex.StackTrace}");
+                Console.WriteLine("Dying...");
+                Thread.Sleep(5000);
+                Environment.Exit(1);
+            }
+            finally
+            {
+                // Clean up resources, if necessary
+                Console.WriteLine("Exiting...");
+                Thread.Sleep(5000);
+                //Console.ReadKey();
             }
 
         }
@@ -265,6 +304,9 @@ namespace Disctalk
         async static public Task<bool> reprocessJson(long channelId = -1)
         {
             bool rv = true;
+
+            bool boolAddMentions = true;
+            bool boolAddServerGlobalName = false;
 
             if (boolViewEmojiReacts)
             {
@@ -295,10 +337,11 @@ namespace Disctalk
                 }
 
                 // Clear out existing data to rewrite new data.
-                if (channelId != -1) {
+                if (channelId != -1)
+                {
                     string delQuery = "DELETE from messagereacts where channelId = @id";
                     var command = new MySqlCommand(delQuery, dbConnection);
-                    command.Parameters.AddWithValue("@id", channelId );
+                    command.Parameters.AddWithValue("@id", channelId);
                     command.ExecuteNonQuery();
                 }
                 else
@@ -360,7 +403,7 @@ namespace Disctalk
                             }
 
                         }
-                        
+
                     }
                     catch (JsonException ex)
                     {
@@ -383,6 +426,175 @@ namespace Disctalk
                 var result = bulkCopy.WriteToServer(dt);
                 Console.WriteLine($"BulkCopy Result: {result.RowsInserted}, {result.Warnings}");
             }
+            else if (boolAddMentions)
+            {
+                Dictionary<long, string> allUserNames = await getUserIdNameMap();
+
+                string selectQuery = "select m.json from messages m where 1=1";
+                if (channelId != -1)
+                {
+                    selectQuery += $" and m.channelId = {channelId}";
+                }
+                selectQuery += " and JSON LIKE '%\"mentions\":[{%' ORDER BY m.messageId asc";
+
+                List<string> jsons = new List<string>();
+
+                Console.WriteLine($"Fetching JSON for " + (channelId == -1 ? "All Channels" : $"channelId {channelId}"));
+                Console.WriteLine($"SQL: {selectQuery}");
+
+                using (var command = new MySqlCommand(selectQuery, dbConnection))
+                {
+                    command.CommandTimeout = 180; // Timeout in seconds, adjust as needed
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string json = reader["json"].ToString();
+                            jsons.Add(json);
+                        }
+                    }
+                }
+
+                if (channelId != -1)
+                {
+                    string delQuery = "DELETE from messageMentions where channelId = @id";
+                    var command = new MySqlCommand(delQuery, dbConnection);
+                    command.Parameters.AddWithValue("@id", channelId);
+                    command.ExecuteNonQuery();
+                }
+                else
+                {
+                    string delQuery = "truncate table messageMentions";
+                    var command = new MySqlCommand(delQuery, dbConnection);
+                    command.ExecuteNonQuery();
+                }
+
+                // Define dataTable we're going to write to in MEMORY, and bulk copy that table to MySql later.
+                DataTable dt = new DataTable("messageMentions");
+                dt.Columns.Add("messageId", typeof(long));
+                dt.Columns.Add("channelId", typeof(long));
+                dt.Columns.Add("userId", typeof(long));
+                dt.Columns.Add("username", typeof(string));
+                dt.Columns.Add("referencedMessage", typeof(long));
+
+                int debugCount = 0;
+                int loopCount = 0;
+                int jsonCount = jsons.Count();
+                int totalMentionsCount = 0;
+                int noMentionsCount = 0;
+                int failCount = 0;
+                int successCount = 0;
+                foreach (var json in jsons)
+                {
+                    loopCount++;
+
+                    try
+                    {
+                        Message message = JsonConvert.DeserializeObject<Message>(json);
+                        
+                        /*
+                        foreach (var mention in message.Mentions)
+                        {
+                            Console.WriteLine($"MSG {message.Id} mentions {allUserNames[mention.id]}:  {loopCount} / {jsonCount}");
+                        }
+                        */
+
+                        (bool insertRv, int countInserted) = await SaveMessageMentions(message, dt);
+
+                        if (!insertRv)
+                        {
+                            failCount++;
+                            if (loopCount++ % 500 == 0)
+                            {
+                                Console.WriteLine($"   Failed to insert mentions for message {message.Id}. {loopCount} / {jsonCount}");
+                            }
+                        }
+                        else
+                        {
+                            successCount++;
+                            totalMentionsCount += countInserted;
+                            if (loopCount++ % 500 == 0)
+                            {
+                                Console.WriteLine($"   SUCCESS: Mentions inserted for message {message.Id}! {loopCount} / {jsonCount}");
+                            }
+
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"ERROR FAILED SOMETHING: {ex.Message}");
+                    }
+
+                }
+
+
+                Console.WriteLine($"{failCount} failed inserts, {successCount} good inserts ({totalMentionsCount} mentions), {noMentionsCount} NOOPS.");
+
+                MySqlBulkCopy bulkCopy = new MySqlBulkCopy(dbConnection)
+                {
+                    DestinationTableName = "messagementions",
+                    ColumnMappings =
+                    {
+                        new MySqlBulkCopyColumnMapping (0, "messageId"),
+                        new MySqlBulkCopyColumnMapping (1, "channelId"),
+                        new MySqlBulkCopyColumnMapping (2, "userId"),
+                        new MySqlBulkCopyColumnMapping (3, "username"),
+                        new MySqlBulkCopyColumnMapping (4, "referencedMessage")
+                    }
+                };
+
+                var result = bulkCopy.WriteToServer(dt);
+                Console.WriteLine($"BulkCopy Result: {result.RowsInserted}, {result.Warnings}");
+            }
+            else if (boolAddServerGlobalName)
+            {
+                string selectQuery = "select us.rawjson from usersServerInfo us where 1=1";
+                selectQuery += " and rawJSON LIKE '%\"global_name\":\"%'";
+
+                List<string> jsons = new List<string>();
+
+                Console.WriteLine($"SQL: {selectQuery}");
+
+                using (var command = new MySqlCommand(selectQuery, dbConnection))
+                {
+                    command.CommandTimeout = 180; // Timeout in seconds, adjust as needed
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string json = reader["rawjson"].ToString();
+                            jsons.Add(json);
+                        }
+                    }
+                }
+
+                int debugCount = 0;
+                int loopCount = 0;
+                int jsonCount = jsons.Count();
+                int failCount = 0;
+                int successCount = 0;
+                foreach (var json in jsons)
+                {
+                    loopCount++;
+
+                    try
+                    {
+                        UserServerInfo user = JsonConvert.DeserializeObject<UserServerInfo>(json);
+                        Console.WriteLine($"{user.User.Username},{user.User.GlobalName} | {loopCount} / {jsonCount}");
+
+                        string delQuery = "update UsersServerInfo set globalName = @name where userId = @id";
+                        var command = new MySqlCommand(delQuery, dbConnection);
+                        command.Parameters.AddWithValue("@name", user.User.GlobalName);
+                        command.Parameters.AddWithValue("@id", user.User.Id);
+                        command.ExecuteNonQuery();
+                    }
+                    catch (Exception ex)
+                    {
+
+                    }
+
+                }
+            }
             else
             {
                 Console.WriteLine($"You didn't specify what to reprocess. Pass -emojireacts to update reaction counts.");
@@ -392,6 +604,82 @@ namespace Disctalk
             return rv;
         }
 
+
+
+
+        async static public Task<(bool, int)> SaveMessageMentions(Message message, DataTable dt)
+        {
+            bool rv = false;
+
+            int countInserted = 0;
+
+            try
+            {
+                if (message.Mentions != null)
+                {
+                    foreach (UserMention men in message.Mentions)
+                    {
+                        DataRow row = dt.NewRow();
+
+                        row["messageId"] = message.Id;
+                        row["channelId"] = message.ChannelId;
+                        row["userId"] = men?.id == null ? DBNull.Value : (object)men?.id; // the userId mentioned
+                        row["username"] = men?.username == null ? DBNull.Value : (object)men?.username; // the username. If the user has been deleted, this is the only spot you'll find their name.
+                        row["referencedMessage"] = message.referencedMessage?.Id == null ? DBNull.Value : (object)message.referencedMessage?.Id;
+
+                        dt.Rows.Add(row);
+                        countInserted++;
+                    }
+                    rv = true;
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed inserting Mention to message {message.Id} {ex.Message}");
+                rv = false;
+            }
+
+
+            return (rv, countInserted);
+        }
+
+        async static public Task<(bool, int)> SaveMessageReactions(Message message, DataTable dt)
+        {
+            bool rv = false;
+
+            int countInserted = 0;
+
+            try
+            {
+                if (message.Reactions != null)
+                {
+                    foreach (Reaction r in message.Reactions)
+                    {
+                        DataRow row = dt.NewRow();
+
+                        row["messageId"] = message.Id;
+                        row["emojiId"] = r.Emoji.Id == null ? DBNull.Value : (object)r.Emoji.Id;
+                        row["emojiName"] = r.Emoji.Name;
+                        row["emojiCount"] = r.Count;    
+                        row["rawJson"] = r.Emoji.rawJson;
+
+                        dt.Rows.Add(row);
+                        countInserted++;
+                    }
+                    rv = true;
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed inserting reaction to message {message.Id} {ex.Message}");
+                rv = false;
+            }
+
+
+            return (rv, countInserted);
+        }
 
         async static public Task<int> updateWordCounts()
         {
@@ -471,43 +759,6 @@ namespace Disctalk
         }
 
 
-        async static public Task<(bool, int)> SaveMessageReactions(Message message, DataTable dt)
-        {
-            bool rv = false;
-
-            int countInserted = 0;
-
-            try
-            {
-                if (message.Reactions != null)
-                {
-                    foreach (Reaction r in message.Reactions)
-                    {
-                        DataRow row = dt.NewRow();
-
-                        row["messageId"] = message.Id;
-                        row["emojiId"] = r.Emoji.Id == null ? DBNull.Value : (object)r.Emoji.Id;
-                        row["emojiName"] = r.Emoji.Name;
-                        row["emojiCount"] = r.Count;    
-                        row["rawJson"] = r.Emoji.rawJson;
-
-                        dt.Rows.Add(row);
-                        countInserted++;
-                    }
-                    rv = true;
-                }
-
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed inserting reaction to message {message.Id} {ex.Message}");
-                rv = false;
-            }
-
-
-            return (rv, countInserted);
-        }
-
         async static public Task<bool> updateAllMessages(long serverId)
         {
             bool rv = false;
@@ -575,6 +826,41 @@ namespace Disctalk
             }
 
             return (rv);
+        }
+
+        async static public Task<Dictionary<long,string>> getUserIdNameMap()
+        {
+            Console.WriteLine($"Creating userId,Name map");
+
+            string selectQuery = @"
+            SELECT distinct m.authorId, 
+            CASE 
+                WHEN us.nick IS NOT NULL AND us.nick <> '' THEN concat(us.nick,'~')
+                when us.globalName is NOT NULL and us.globalName <> '' then concat(us.globalName,'~~~~~')
+                WHEN us.username IS NOT NULL AND us.username <> '' THEN concat(us.username,'~~')
+                when u.username is not null and u.username <> '' AND u.username <> 'NULL' then concat(u.username,'~~~')
+                ELSE concat(m.authorUsername,'~~~~')
+            END AS DisplayName 
+            FROM messages m
+            left outer join users u on m.authorId = u.userId
+            left outer join usersServerInfo us on m.authorId = us.userId
+            ";
+
+            Dictionary<long,string> allUsers = new Dictionary<long,string>();
+            using (var command = new MySqlCommand(selectQuery, dbConnection))
+            {
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        long userId = long.Parse(reader["authorId"].ToString());
+                        string username = reader["DisplayName"].ToString();
+                        allUsers[userId] = username;
+                    }
+                }
+            }
+
+            return (allUsers);
         }
 
         async static public Task<bool> updateAllUserServerInfo(long serverId)
@@ -1157,11 +1443,14 @@ namespace Disctalk
 
             try
             {
-                delQuery = "DELETE from users where userId = @id";
-                using (var command = new MySqlCommand(delQuery, dbConnection))
+                if (user != null)
                 {
-                    command.Parameters.AddWithValue("@id", user.User.Id);
-                    command.ExecuteNonQuery();
+                    delQuery = "DELETE from users where userId = @id";
+                    using (var command = new MySqlCommand(delQuery, dbConnection))
+                    {
+                        command.Parameters.AddWithValue("@id", user.User.Id);
+                        command.ExecuteNonQuery();
+                    }
                 }
 
                 if (user == null && userId != -1)
@@ -1203,7 +1492,7 @@ namespace Disctalk
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"error inserting User: del={delQuery}{user.User.Id}{user.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
+                Console.WriteLine($"error inserting User: del={delQuery}{user?.User?.Id}{user?.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
                 rv = false;
             }
 
@@ -1376,6 +1665,8 @@ namespace Disctalk
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"Error connecting to database!! {ex.Message} {ex.StackTrace}");
+                Thread.Sleep(5000);
                 rv = false;
             }
 
@@ -1636,7 +1927,7 @@ namespace Disctalk
 
         public class UserMention
         {
-            public string id { get; set; }
+            public long id { get; set; }
             public string username { get; set; }
             public string avatar { get; set; }
             public string discriminator { get; set; }
