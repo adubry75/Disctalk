@@ -38,6 +38,7 @@ namespace Disctalk
         static public bool boolUpdateUserServerInfo = false;
         static public bool boolUpdateAllMessages = false;
         static public bool boolReprocessJson = false;
+        static public bool boolAddMentions = false;
         static public bool boolForceAll = false;
         static public bool boolWordCount = false;
         static public string claServerId = null;
@@ -295,7 +296,7 @@ namespace Disctalk
             {
                 // Clean up resources, if necessary
                 Console.WriteLine("Exiting...");
-                Thread.Sleep(5000);
+                Thread.Sleep(1000);
                 //Console.ReadKey();
             }
 
@@ -305,7 +306,6 @@ namespace Disctalk
         {
             bool rv = true;
 
-            bool boolAddMentions = true;
             bool boolAddServerGlobalName = false;
 
             if (boolViewEmojiReacts)
@@ -313,7 +313,14 @@ namespace Disctalk
                 string selectQuery = "select m.json from messages m left outer join channels c on m.channelId = c.channelId where 1=1";
                 if (channelId != -1)
                 {
+                    Console.WriteLine($"Only processing for channel {claChannel}");
                     selectQuery += $" and m.channelId = {channelId}";
+                }
+
+                if (claServerId != null)
+                {
+                    Console.WriteLine($"Only processing for server {claServerId}");
+                    selectQuery += $" and c.serverId = {claServerId}";
                 }
                 selectQuery += " and JSON LIKE '%\"reactions\":[%'";
                 //selectQuery += " order by m.channelId asc, m.timestamp desc ";
@@ -339,14 +346,21 @@ namespace Disctalk
                 // Clear out existing data to rewrite new data.
                 if (channelId != -1)
                 {
-                    string delQuery = "DELETE from messagereacts where channelId = @id";
+                    string delQuery = "DELETE from messagereacts where channelId = @id"; // THIS WILL BREAK! do a triple join like I do below for claServerId
                     var command = new MySqlCommand(delQuery, dbConnection);
                     command.Parameters.AddWithValue("@id", channelId);
                     command.ExecuteNonQuery();
                 }
+                else if (claServerId != null)
+                {
+                    string delQuery = $"DELETE mr FROM messagereacts mr JOIN messages m ON mr.messageId = m.messageId JOIN channels c ON m.channelId = c.channelId WHERE c.serverId = {claServerId}";
+                    var command = new MySqlCommand(delQuery, dbConnection);
+                    command.ExecuteNonQuery();
+                }
                 else
                 {
-                    string delQuery = "truncate table messagereacts";
+                    Console.WriteLine($"No server or channel passed, truncating table, repopulating from scratch.");
+                    string delQuery = $"truncate table messagereacts";
                     var command = new MySqlCommand(delQuery, dbConnection);
                     command.ExecuteNonQuery();
                 }
@@ -430,11 +444,17 @@ namespace Disctalk
             {
                 Dictionary<long, string> allUserNames = await getUserIdNameMap();
 
-                string selectQuery = "select m.json from messages m where 1=1";
+                string selectQuery = "select m.json from messages m left outer join channels c on m.channelId = c.channelId where 1=1";
                 if (channelId != -1)
                 {
                     selectQuery += $" and m.channelId = {channelId}";
                 }
+
+                if (claServerId != null)
+                {
+                    selectQuery += $" and c.serverId = {claServerId}";
+                }
+
                 selectQuery += " and JSON LIKE '%\"mentions\":[{%' ORDER BY m.messageId asc";
 
                 List<string> jsons = new List<string>();
@@ -460,6 +480,12 @@ namespace Disctalk
                     string delQuery = "DELETE from messageMentions where channelId = @id";
                     var command = new MySqlCommand(delQuery, dbConnection);
                     command.Parameters.AddWithValue("@id", channelId);
+                    command.ExecuteNonQuery();
+                }
+                else if (claServerId != null)
+                {
+                    string delQuery = $"DELETE from messageMentions where channelId in (select channelId from channels where serverId = {claServerId})";
+                    var command = new MySqlCommand(delQuery, dbConnection);
                     command.ExecuteNonQuery();
                 }
                 else
@@ -681,22 +707,58 @@ namespace Disctalk
             return (rv, countInserted);
         }
 
+
+        public class wordCount
+        {
+            public string word { get; set; }
+            public long messageId { get; set; }
+            public long channelId { get; set; }
+            public long authorId { get; set; }
+            public string authorUsername { get; set; }
+            public DateTime timeStamp { get; set; }
+            public long serverId { get; set; }
+
+        }
+
         async static public Task<int> updateWordCounts()
         {
             int rv = 0;
 
-            string selectQuery = @"SELECT MessageId, ChannelId, AuthorId, AuthorUsername, Content, Timestamp 
-                FROM Messages 
-                where channelId = 394388671459229696";
-            string insertQuery = @"INSERT INTO Words 
-                (Word, MessageId, ChannelId, AuthorId, AuthorUsername, Timestamp) 
-                VALUES 
-                (@Word, @MessageId, @ChannelId, @AuthorId, @AuthorUsername, @Timestamp)";
+            Console.WriteLine("Retrieving words for word count...");
+            string selectQuery = @"SELECT m.MessageId, m.ChannelId, m.AuthorId, m.AuthorUsername, m.Content, m.Timestamp, c.serverId
+                FROM Messages m
+                join channels c on m.channelId = c.channelId";
 
-            int insertCount = 0;
 
-            // Define a list to hold all messages from the database
-            List<Tuple<long, long, long, string, string, DateTime>> messages = new List<Tuple<long, long, long, string, string, DateTime>>();
+            if (claChannel != null)
+            {
+                selectQuery += $" and c.name = {claChannel}";
+                
+            }
+
+            if (claServerId != null)
+            {
+                selectQuery += $" and c.serverId = {claServerId}";
+
+                Console.WriteLine($"Deleting word counts for server {claServerId}");
+                string delQuery = $"delete from words where serverId = {claServerId}";
+                var command = new MySqlCommand(delQuery, dbConnection);
+                command.ExecuteNonQuery();
+            }
+
+
+
+            DataTable dt = new DataTable("words");
+            dt.Columns.Add("word", typeof(string));
+            dt.Columns.Add("messageId", typeof(long));
+            dt.Columns.Add("channelId", typeof(long));
+            dt.Columns.Add("authorId", typeof(long));
+            dt.Columns.Add("authorUsername", typeof(string));
+            dt.Columns.Add("timestamp", typeof(DateTime));
+            dt.Columns.Add("serverId", typeof(long));
+
+            int wordcount = 0;
+            int linecount = 0;
 
             // Fetch messages
             using (var command = new MySqlCommand(selectQuery, dbConnection))
@@ -705,55 +767,57 @@ namespace Disctalk
                 {
                     while (await reader.ReadAsync())
                     {
-                        long messageId = reader.GetInt64(0);
-                        long channelId = reader.GetInt64(1);
-                        long authorId = reader.GetInt64(2);
-                        string authorUsername = reader.GetString(3);
+
+                        // Split content into words, considering spaces, tabs, and returns
+                        string[] delimiters = new string[] { " ", "\t", "\n", "\r", "\r\n" };
                         string content = reader.GetString(4);
-                        DateTime timestamp = reader.GetDateTime(5);
+                        List<string> words = content.Split(delimiters, StringSplitOptions.RemoveEmptyEntries).ToList<string>();
+                        words = words.Distinct().ToList();
 
-                        messages.Add(new Tuple<long, long, long, string, string, DateTime>(messageId, channelId, authorId, authorUsername, content, timestamp));
+                        if (linecount++ % 5000 == 0)
+                        {
+                            Console.WriteLine($"Progress: {linecount} ({wordcount} words)");
+                        }
+
+                        foreach (var word in words)
+                        {
+
+                            DataRow row = dt.NewRow();
+
+                            row["word"] = word;
+                            row["messageId"] = reader.GetInt64(0);
+                            row["channelId"] = reader.GetInt64(1);
+                            row["authorId"] = reader.GetInt64(2);
+                            row["authorUsername"] = reader.GetString(3);
+                            row["timestamp"] = reader.GetDateTime(5);
+                            row["serverId"] = reader.GetInt64(6);
+
+                            dt.Rows.Add(row);
+
+                            wordcount++;
+                        }
                     }
                 }
             }
 
-            // Now the reader is closed, start inserting
-            int msgCount = 0;
-            int totalMsg = messages.Count();
-            foreach (var message in messages)
+            Console.WriteLine($"Bulk writing words table now... {wordcount} rows");
+            MySqlBulkCopy bulkCopy = new MySqlBulkCopy(dbConnection)
             {
-                long messageId = message.Item1;
-                long channelId = message.Item2;
-                long authorId = message.Item3;
-                string authorUsername = message.Item4;
-                string content = message.Item5;
-                DateTime timestamp = message.Item6;
-
-                // Split content into words, considering spaces, tabs, and returns
-                string[] delimiters = new string[] { " ", "\t", "\n", "\r", "\r\n" };
-                string[] words = content.Split(delimiters, StringSplitOptions.RemoveEmptyEntries);
-
-
-                foreach (var word in words)
-                {
-                    using (var insertCommand = new MySqlCommand(insertQuery, dbConnection))
+                DestinationTableName = "words",
+                ColumnMappings =
                     {
-                        insertCommand.Parameters.AddWithValue("@Word", word);
-                        insertCommand.Parameters.AddWithValue("@MessageId", messageId);
-                        insertCommand.Parameters.AddWithValue("@ChannelId", channelId);
-                        insertCommand.Parameters.AddWithValue("@AuthorId", authorId);
-                        insertCommand.Parameters.AddWithValue("@AuthorUsername", authorUsername);
-                        insertCommand.Parameters.AddWithValue("@Timestamp", timestamp);
-
-                        //Console.WriteLine($"     Inserting word '{word}'.");
-                        await insertCommand.ExecuteNonQueryAsync();
-                        insertCount++;
+                        new MySqlBulkCopyColumnMapping (0, "word"),
+                        new MySqlBulkCopyColumnMapping (1, "messageId"),
+                        new MySqlBulkCopyColumnMapping (2, "channelId"),
+                        new MySqlBulkCopyColumnMapping (3, "authorId"),
+                        new MySqlBulkCopyColumnMapping (4, "authorUsername"),
+                        new MySqlBulkCopyColumnMapping (5, "timestamp"),
+                        new MySqlBulkCopyColumnMapping (6, "serverId")
                     }
-                }
-                Console.WriteLine($"Progress: {msgCount++} / {totalMsg}");
-            }
+            };
 
-            Console.WriteLine($"{insertCount} words have been successfully extracted and inserted.");
+            var result = bulkCopy.WriteToServer(dt);
+            Console.WriteLine($"BulkCopy Result: {result.RowsInserted}, {result.Warnings}");
 
             return rv;
         }
@@ -799,19 +863,28 @@ namespace Disctalk
         {
             bool rv = false;
 
-            string selectQuery = "SELECT distinct authorId as userId FROM messages where authorId not in (select userId from users)";
+            string selectQuery = "SELECT distinct authorId as userId FROM messages m LEFT OUTER JOIN users u ON m.authorId=u.userId WHERE u.userId IS null";
             List<long> userIds = new List<long>();
 
-            using (var command = new MySqlCommand(selectQuery, dbConnection))
+            try
             {
-                using (var reader = command.ExecuteReader())
+                using (var command = new MySqlCommand(selectQuery, dbConnection))
                 {
-                    while (reader.Read())
+                    command.CommandTimeout = 180;
+                    using (var reader = command.ExecuteReader())
                     {
-                        string userId = reader["userId"].ToString();
-                        userIds.Add(long.Parse(userId));
+                        while (reader.Read())
+                        {
+                            string userId = reader["userId"].ToString();
+                            userIds.Add(long.Parse(userId));
+                        }
                     }
                 }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error selecting unknown users to populate: {e.Message}");
+                return (false);
             }
 
             foreach (long id in userIds)
@@ -835,11 +908,11 @@ namespace Disctalk
             string selectQuery = @"
             SELECT distinct m.authorId, 
             CASE 
-                WHEN us.nick IS NOT NULL AND us.nick <> '' THEN concat(us.nick,'~')
-                when us.globalName is NOT NULL and us.globalName <> '' then concat(us.globalName,'~~~~~')
-                WHEN us.username IS NOT NULL AND us.username <> '' THEN concat(us.username,'~~')
-                when u.username is not null and u.username <> '' AND u.username <> 'NULL' then concat(u.username,'~~~')
-                ELSE concat(m.authorUsername,'~~~~')
+                WHEN us.nick IS NOT NULL AND us.nick <> '' THEN concat(us.nick,'')
+                when us.globalName is NOT NULL and us.globalName <> '' then concat(us.globalName,'')
+                WHEN us.username IS NOT NULL AND us.username <> '' THEN concat(us.username,'')
+                when u.username is not null and u.username <> '' AND u.username <> 'NULL' then concat(u.username,'')
+                ELSE concat(m.authorUsername,'')
             END AS DisplayName 
             FROM messages m
             left outer join users u on m.authorId = u.userId
@@ -851,6 +924,7 @@ namespace Disctalk
             {
                 using (var reader = command.ExecuteReader())
                 {
+                    command.CommandTimeout = 180;
                     while (reader.Read())
                     {
                         long userId = long.Parse(reader["authorId"].ToString());
@@ -1024,7 +1098,7 @@ namespace Disctalk
                 tooManyRequests = true;
 
                 // Temp HACK, just die after the Retry-After timeout to play nice while developing...
-                KILLSWITCH = true;
+                //KILLSWITCH = true;
 
                 return (null);
             }
@@ -1111,7 +1185,7 @@ namespace Disctalk
 
 
                 tooManyRequests = true;
-                KILLSWITCH = true;
+                //KILLSWITCH = true;
 
                 return (null);
             }
@@ -1369,6 +1443,8 @@ namespace Disctalk
 
             return (allMessages);
         }
+
+
 
         static public void SaveMessage(Message message)
         {
@@ -1643,6 +1719,51 @@ namespace Disctalk
             {
                 Console.WriteLine($"error inserting User {user.User.Id} server {user.serverId}: del={delQuery}{user.rawJson},ins={insertQuery}. {ex.Message} {ex.StackTrace}");
                 rv = false;
+            }
+
+            return (rv);
+        }
+
+        async static public Task<bool> splitWords()
+        {
+            bool rv = false;
+
+            string selectQuery = $@"SELECT m.content, m.messageId, m.channelId, c.serverId 
+                FROM messages m
+                join channels c on m.channelId = c.channelId
+                where 1=1";
+
+            if (claChannel != null)
+            {
+                selectQuery += $" and c.name = {claChannel}";
+            }
+
+            if (claServerId != null)
+            {
+                selectQuery += $" and c.serverId = {claServerId}";
+            }
+
+            using (var command = new MySqlCommand(selectQuery, dbConnection))
+            {
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string message = reader["content"].ToString();
+                        string messageId = reader["messageId"].ToString();
+                        string channelId = reader["channelId"].ToString();
+                        string serverId = reader["serverId"].ToString();
+
+                        List<string> words = message.Split(' ').ToList<string>();
+                        words = words.Distinct().ToList();
+
+                        foreach (string word in words)
+                        {
+                            Console.WriteLine($"{serverId},{channelId},{messageId}: {word}");
+                        }
+                        
+                    }
+                }
             }
 
             return (rv);
@@ -2494,6 +2615,7 @@ namespace Disctalk
                 { "roles", "View Roles available on a server.", v=> boolViewRoles = true },
                 { "emojis", "View Emojis available on a server.", v=> boolViewEmojis = true },
                 { "emojireacts", "Look at emoji reactions.", v=> boolViewEmojiReacts = true },
+                { "addmentions", "Process all Mentions of people.", v=> boolAddMentions = true },
                 { "stickers", "View Stickers available on a server.", v=> boolViewStickers = true },
                 { "server=", "Specify server, pass it's Id", v=> claServerId = v },
                 { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
