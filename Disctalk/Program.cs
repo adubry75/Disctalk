@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MySqlConnector;
 using System.Data;
+using System.Runtime.CompilerServices;
 
 namespace Disctalk
 {
@@ -849,7 +850,7 @@ namespace Disctalk
                 }
 
                 Console.WriteLine($"\nUpdating Channel: {c.Name} {c.Id}... ({channelCount++} / {totalChannels})");
-                List<Message> messages = await getMessages(c, 999999, boolForceAll ? false : true);
+                List<Message> messages = await getMessages(c, 9999999, boolForceAll ? false : true); //TODO what about channels with over 9999999 messages?!
                 Console.WriteLine($"Updated {messages.Count()} in channel {c.Name} ({c.Id})");
                 totalMessagesUpdated += messages.Count();
             }
@@ -863,7 +864,18 @@ namespace Disctalk
         {
             bool rv = false;
 
-            string selectQuery = "SELECT distinct authorId as userId FROM messages m LEFT OUTER JOIN users u ON m.authorId=u.userId WHERE u.userId IS null";
+            string selectQuery = @"SELECT distinct authorId as userId 
+                FROM messages m 
+                LEFT OUTER JOIN users u 
+                ON m.authorId=u.userId
+                left outer join channels
+                WHERE u.userId IS null";
+
+            //if(claServerId != null)
+            //{
+                //selectQuery += $" and m.ServerId = {claServerId}"; this code is broken, fix me!, the join doesn't join to a table.
+            //}
+
             List<long> userIds = new List<long>();
 
             try
@@ -886,6 +898,8 @@ namespace Disctalk
                 Console.WriteLine($"Error selecting unknown users to populate: {e.Message}");
                 return (false);
             }
+
+            Console.WriteLine($"Found {userIds.Count} new users to fetch data on...");
 
             foreach (long id in userIds)
             {
@@ -1358,6 +1372,7 @@ namespace Disctalk
                 }
                 else if (startingMsgId != -1)
                 {
+                    Console.WriteLine($"  and before messageId {startingMsgId}");
                     url += $"&before={startingMsgId}";
                 }
 
@@ -1391,9 +1406,9 @@ namespace Disctalk
                             lastTimeStamp = date;
                             message.json = JsonConvert.SerializeObject(message);
                             //Console.WriteLine($"JSON: {message.json}");
-                            if (updateNew && (lastTimeStamp < maxDateTime))
+                            if (updateNew && (lastTimeStamp < maxDateTime) && startingMsgId == -1)
                             {
-                                // We've come to a message older than the newest message in the database, so we're all caught up!
+                                // We've come to a message older than the newest message in the database (and we're not starting in the past), so we're all caught up!
                                 Console.WriteLine($"{lastTimeStamp} < {maxDateTime}, all caught up, breaking out of loop!");
                                 breakLoop = true;
                                 break;
@@ -1991,8 +2006,24 @@ namespace Disctalk
             public string BannerColor { get; set; }
 
             [JsonProperty("clan")]
-            public string Clan { get; set; }
+            public Clan Clan { get; set; } 
 
+        }
+
+
+        public class Clan
+        {
+            [JsonProperty("identity_guild_id")]
+            public string IdentityGuildId { get; set; }
+
+            [JsonProperty("identity_enabled")]
+            public bool? IdentityEnabled { get; set; }
+
+            [JsonProperty("tag")]
+            public string Tag { get; set; }
+
+            [JsonProperty("badge")]
+            public string Badge { get; set; }
         }
 
         public class Attachment
@@ -2061,7 +2092,7 @@ namespace Disctalk
             [JsonProperty("avatar_decoration_data")]
             public AvatarDecorationData AvatarDecorationData { get; set; } // Changed from string to AvatarDecorationData
             public string banner_color { get; set; }
-            public string clan { get; set; }
+            public Clan clan { get; set; }
         }
 
         public class Component
@@ -2621,6 +2652,7 @@ namespace Disctalk
                 { "preview", "Get minimal server info, but also gets Member Counts.", v=> boolServerPreview = true },
                 { "msglimit=", "Total # of messages to retrieve. Default=100.", v=> totalMessageLimit = int.Parse(v) },
                 { "beforemsg=", "Get messages prior to this messageId.", v=> startingMsgId = long.Parse(v) },
+                { "aftermsg=", "TESTETESTTESTSE Get messages AFTER to this messageId.", v=> startingMsgId = long.Parse(v) },
                 { "msgpp=", "# of message to retrieve per request. Default 100.", v=> messagesPerFetch = int.Parse(v) },
                 { "say=", "What text to send.",option => textToSend = option },
                 { "saveusers", "Look up ALL user info and update the database.", v => boolUpdateUsers = true },
