@@ -47,13 +47,7 @@ namespace Disctalk
         static public string orderBy = "asc"; // anything not "desc" will imply "asc"
         static public bool testMode = false;
         static public bool debugMode = false;
-        static public string token = Environment.GetEnvironmentVariable("MY_BOT_TOKEN");
-        static public bool tooManyRequests = false;
-
-        static public bool KILLSWITCH = false;
-
-        static public HttpClient httpClient = null;
-        static public HttpRequestMessage httpRequest = null;
+        static DiscordApiClient _apiClient;
         static MySqlConnection dbConnection = null;
 
         // Channels I don't have access to or were discontinued.
@@ -87,6 +81,11 @@ namespace Disctalk
 
                 if (!parseArgs(args)) { return; }
 
+                _apiClient = new DiscordApiClient(Environment.GetEnvironmentVariable("MY_BOT_TOKEN"));
+                _apiClient.MessagesPerFetch = messagesPerFetch;
+                _apiClient.StartingMessageId = startingMsgId;
+                _apiClient.OrderBy = orderBy;
+
                 bool dbRv = await connectToDB();
                 if (!dbRv)
                 {
@@ -101,7 +100,7 @@ namespace Disctalk
 
                 if (textToSend != null)
                 {
-                    await sendText();
+                    await _apiClient.SendTextAsync(channelId, textToSend);
                     return;
                 }
 
@@ -135,7 +134,7 @@ namespace Disctalk
                         return;
                     }
 
-                    List<Channel> channels = await getChannels(long.Parse(claServerId));
+                    List<Channel> channels = await _apiClient.GetChannelsAsync(long.Parse(claServerId));
                     Channel channelMatch = channels.FirstOrDefault(channel => channel.Name == claChannel);
                     if (channelMatch == null)
                     {
@@ -147,7 +146,7 @@ namespace Disctalk
                         return;
                     }
 
-                    List<Message> messages = await getMessages(channelMatch, totalMessageLimit, false);
+                    List<Message> messages = await _apiClient.GetMessagesAsync(channelMatch, totalMessageLimit, false, DateTime.MinValue, SaveMessage, SaveResponse);
                     foreach (Message message in messages)
                     {
                         DateTime date = message.Timestamp;
@@ -163,13 +162,13 @@ namespace Disctalk
 
                 if (boolViewServers)
                 {
-                    await viewServers();
+                    await _apiClient.ViewServersAsync();
                     return;
                 }
 
                 if (boolViewChannels)
                 {
-                    List<Channel> channels = await getChannels(long.Parse(claServerId));
+                    List<Channel> channels = await _apiClient.GetChannelsAsync(long.Parse(claServerId));
                     if (channels == null)
                     {
                         Console.WriteLine("Error getting channels, dying.");
@@ -244,7 +243,7 @@ namespace Disctalk
 
                 if (claServerId != null)
                 {
-                    dynamic server = await getServer(claServerId);
+                    dynamic server = await _apiClient.GetServerAsync(claServerId, boolServerPreview);
                     Console.WriteLine($"{server.Name}: {server.Description}");
                     if (boolServerPreview)
                     {
@@ -818,7 +817,7 @@ namespace Disctalk
         {
             bool rv = false;
 
-            List<Channel> channels = await getChannels(serverId);
+            List<Channel> channels = await _apiClient.GetChannelsAsync(serverId);
             int channelCount = 1;
             int totalChannels = channels.Count;
             int totalMessagesUpdated = 0;
@@ -839,8 +838,29 @@ namespace Disctalk
                     continue;
                 }
 
+                bool updateNew = !boolForceAll;
+                DateTime maxDateTime = DateTime.MinValue;
+                if (updateNew)
+                {
+                    string selectQuery = $"SELECT ifnull(max(TIMESTAMP),-1) as lastMsgDate FROM messages where channelId = {c.Id}";
+                    using (var command = new MySqlCommand(selectQuery, dbConnection))
+                    {
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                string result = reader["lastMsgDate"].ToString();
+                                if (result != "-1")
+                                {
+                                    maxDateTime = DateTime.Parse(reader["lastMsgDate"].ToString());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Console.WriteLine($"\nUpdating Channel: {c.Name} {c.Id}... ({channelCount++} / {totalChannels})");
-                List<Message> messages = await getMessages(c, 9999999, boolForceAll ? false : true); //TODO what about channels with over 9999999 messages?!
+                List<Message> messages = await _apiClient.GetMessagesAsync(c, 9999999, updateNew, maxDateTime, SaveMessage, SaveResponse); //TODO what about channels with over 9999999 messages?!
                 Console.WriteLine($"Updated {messages.Count()} in channel {c.Name} ({c.Id})");
                 totalMessagesUpdated += messages.Count();
             }
@@ -895,7 +915,7 @@ namespace Disctalk
             {
                 await viewUserProfile(id);
                 Thread.Sleep(1000); // play nice, don't exceed requests limit.
-                if (KILLSWITCH)
+                if (_apiClient.KillSwitch)
                 {
                     Console.WriteLine("429, dying for now to play nice...");
                     break;
@@ -965,7 +985,7 @@ namespace Disctalk
             {
                 await viewUserServerProfile(serverId, id);
                 Thread.Sleep(1000); // play nice, don't exceed requests limit.
-                if (KILLSWITCH)
+                if (_apiClient.KillSwitch)
                 {
                     Console.WriteLine($"429, server {serverId}, user {id}. Dying for now...");
                     break;
@@ -979,12 +999,12 @@ namespace Disctalk
         {
             bool rv = false;
 
-            UserServerInfo user = await getUserServerInfo(serverId, userId);
+            UserServerInfo user = await _apiClient.GetUserServerInfoAsync(serverId, userId);
             if (user == null)
             {
                 Console.WriteLine($"Could not get info for userId {userId}, server {serverId}");
                 // Mark them invalid so we don't keep checking next time.
-                if (!tooManyRequests)
+                if (!_apiClient.TooManyRequests)
                 {
                     // Don't mark them if the null is because of a 429; we'll retry later.
                     SaveUserServerInfo(null, serverId, userId);
@@ -1004,12 +1024,12 @@ namespace Disctalk
         {
             bool rv = false;
 
-            RootUserObject user = await getUser(userId);
+            RootUserObject user = await _apiClient.GetUserAsync(userId);
             if (user == null)
             {
                 Console.WriteLine($"Could not get info for userId {userId}");
                 // Mark them invalid so we don't keep checking next time.
-                if (!tooManyRequests)
+                if (!_apiClient.TooManyRequests)
                 {
                     // Don't mark them if the null is because of a 429; we'll retry later.
                     SaveUser(null, userId);
@@ -1025,429 +1045,6 @@ namespace Disctalk
             return (rv);
         }
 
-        async static public Task<RootUserObject> getUser(long userId)
-        {
-            //    https://discord.com/api/v9/users/[userid]
-            // or https://discord.com/api/v9/users/[userid]/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=false
-            // or https://discord.com/api/v9/guilds/[serverid]/members/[userId] for more server specific info
-
-            RootUserObject user = null;
-
-            string url = $"https://discord.com/api/v9/users/{userId}/profile";
-
-            prepareClient(url, new HttpMethod("GET"));
-
-            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-
-            string responseBody = "";
-            if (response.IsSuccessStatusCode)
-            {
-                try
-                {
-                    responseBody = await response.Content.ReadAsStringAsync();
-                    user = JsonConvert.DeserializeObject<RootUserObject>(responseBody);
-                    user.rawJson = responseBody;
-
-                    tooManyRequests = false;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error parsing JSON for userId {userId}. {ex.Message} {ex.StackTrace} JSON:{responseBody}");
-                }
-            }
-            else if (response.StatusCode == HttpStatusCode.Forbidden)
-            {
-                Console.WriteLine($"\nForbidden response, user probably no longer on server.");
-                return (null);
-            }
-            else if ((int)response.StatusCode == 429)
-            {
-                Console.WriteLine("Too many requests, pausing for a few* seconds...");
-
-                // Print all response headers
-                foreach (var header in response.Headers)
-                {
-                    Console.WriteLine($"Header: {header.Key}: {string.Join(", ", header.Value)}");
-                }
-
-                // If there are any content headers, print them as well
-                foreach (var contentHeader in response.Content.Headers)
-                {
-                    Console.WriteLine($"ContentHeader: {contentHeader.Key}: {string.Join(", ", contentHeader.Value)}");
-                }
-
-                int sleepTime = 90000; // Default sleep time in seconds if 'Retry-After' is not found
-                if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string> values))
-                {
-                    var retryAfterValue = values.First();
-                    if (int.TryParse(retryAfterValue, out int retrySeconds))
-                    {
-                        Console.WriteLine($"\nDELAY 429!!! Setting 429 delay time to Retry-After value of {retrySeconds} seconds");
-                        sleepTime = retrySeconds + 2; // + 2 for margin...
-                    }
-                    else
-                    {
-                        Console.WriteLine("Failed to parse 'Retry-After' header to an integer.");
-                    }
-                }
-                else
-                {
-                    Console.WriteLine("'Retry-After' header not found. Using default sleep time.");
-                }
-
-                Thread.Sleep(sleepTime * 1000); // Multiply by 1000 to convert seconds to milliseconds
-
-
-
-                tooManyRequests = true;
-
-                // Temp HACK, just die after the Retry-After timeout to play nice while developing...
-                //KILLSWITCH = true;
-
-                return (null);
-            }
-            else
-            {
-                Console.WriteLine($"Error getting user {userId}! {response.StatusCode} ({(int)response.StatusCode})");
-            }
-
-            return user;
-        }
-
-
-        async static public Task<UserServerInfo> getUserServerInfo(long serverId, long userId)
-        {
-            // https://discord.com/api/v9/guilds/[serverId]/members/[userId] for more server specific info
-
-            UserServerInfo user = null;
-
-            string url = $"https://discord.com/api/v9/guilds/{serverId}/members/{userId}";
-
-            prepareClient(url, new HttpMethod("GET"));
-
-            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-
-            string responseBody = "";
-            if (response.IsSuccessStatusCode)
-            {
-                try
-                {
-                    responseBody = await response.Content.ReadAsStringAsync();
-                    user = JsonConvert.DeserializeObject<UserServerInfo>(responseBody);
-                    user.serverId = serverId;
-                    user.rawJson = responseBody;
-
-
-                    tooManyRequests = false;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error parsing JSON for userId {userId}, server {serverId}. {ex.Message} {ex.StackTrace} JSON:{responseBody}");
-                }
-            }
-            else if (response.StatusCode == HttpStatusCode.Forbidden)
-            {
-                Console.WriteLine($"\nForbidden response, user probably no longer on server.");
-                return (null);
-            }
-            else if ((int)response.StatusCode == 429)
-            {
-                Console.WriteLine("Too many requests, pausing for a few* seconds...");
-
-                // Print all response headers
-                foreach (var header in response.Headers)
-                {
-                    Console.WriteLine($"Header: {header.Key}: {string.Join(", ", header.Value)}");
-                }
-
-                // If there are any content headers, print them as well
-                foreach (var contentHeader in response.Content.Headers)
-                {
-                    Console.WriteLine($"ContentHeader: {contentHeader.Key}: {string.Join(", ", contentHeader.Value)}");
-                }
-
-                int sleepTime = 90000; // Default sleep time in seconds if 'Retry-After' is not found
-                if (response.Headers.TryGetValues("Retry-After", out IEnumerable<string> values))
-                {
-                    var retryAfterValue = values.First();
-                    if (int.TryParse(retryAfterValue, out int retrySeconds))
-                    {
-                        Console.WriteLine($"\nDELAY 429!!! Setting 429 delay time to Retry-After value of {retrySeconds} seconds");
-                        sleepTime = retrySeconds + 2; // + 2 for margin...
-                    }
-                    else
-                    {
-                        Console.WriteLine("Failed to parse 'Retry-After' header to an integer.");
-                    }
-                }
-                else
-                {
-                    Console.WriteLine("'Retry-After' header not found. Using default sleep time.");
-                }
-
-                Thread.Sleep(sleepTime * 1000); // Multiply by 1000 to convert seconds to milliseconds
-
-
-                tooManyRequests = true;
-                //KILLSWITCH = true;
-
-                return (null);
-            }
-            else if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                Console.WriteLine($"404 Not Found, user must have left server recently. Skipping.");
-                return (null);
-            }
-            else
-            {
-                Console.WriteLine($"Error getting user {userId}, server {serverId}! {response.StatusCode} ({(int)response.StatusCode}) JSON: {responseBody}");
-            }
-
-            return user;
-        }
-
-        async static public Task<dynamic> getServer(string guildId)
-        {
-            // https://discord.com/api/v9/guilds/[serverId]
-            // https://discord.com/api/v9/guilds/[serverId]/preview
-            Server server = new Server();
-
-            string url = $"https://discord.com/api/v9/guilds/{guildId}" + (boolServerPreview ? "/preview" : "");
-
-            prepareClient(url, new HttpMethod("GET"));
-
-            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-
-            if (response.IsSuccessStatusCode)
-            {
-                string responseBody = await response.Content.ReadAsStringAsync();
-                if (boolServerPreview)
-                {
-                    return JsonConvert.DeserializeObject<ServerPreview>(responseBody);
-                }
-                else
-                {
-                    return JsonConvert.DeserializeObject<Server>(responseBody);
-                }
-            }
-            else
-            {
-                Console.WriteLine($"Error getting server {guildId}! {response.StatusCode} ({(int)response.StatusCode})");
-            }
-
-            return server;
-        }
-
-        async static public Task<bool> viewServers()
-        {
-            bool rv = false;
-
-            // https://discord.com/api/v9/users/@me/guilds
-            string url = $"https://discord.com/api/v9/users/@me/guilds";
-
-            prepareClient(url, new HttpMethod("GET"));
-
-            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-
-            if (response.IsSuccessStatusCode)
-            {
-
-                string responseBody = await response.Content.ReadAsStringAsync();
-
-                var servers = JsonConvert.DeserializeObject<ServerHeader[]>(responseBody);
-
-                foreach (var server in servers)
-                {
-                    Console.WriteLine($"{server.Id}: {server.name}");
-                }
-
-                rv = true;
-            }
-            else
-            {
-                Console.WriteLine($"Error getting list of servers! {response.StatusCode} ({(int)response.StatusCode})");
-                rv = false;
-            }
-
-
-            return (rv);
-        }
-
-        async static public Task<List<Channel>> getChannels(long serverId)
-        {
-            List<Channel> channels = new List<Channel>();
-
-            if (claServerId == null)
-            {
-                Console.WriteLine("You need to pass a --server to view channels.");
-                return (null);
-            }
-
-
-            // https://discord.com/api/v9/users/@me/guilds
-            string url = $"https://discord.com/api/v9/guilds/{serverId}/channels";
-
-            prepareClient(url, new HttpMethod("GET"));
-
-            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-
-            if (response.IsSuccessStatusCode)
-            {
-
-                string responseBody = await response.Content.ReadAsStringAsync();
-                if (debugMode) { Console.WriteLine(responseBody); }
-                channels = JsonConvert.DeserializeObject<Channel[]>(responseBody).ToList<Channel>();
-            }
-            else
-            {
-                Console.WriteLine($"Error getting list of channels! {response.StatusCode} ({(int)response.StatusCode})");
-                return (null);
-            }
-
-
-            return (channels);
-        }
-
-        async static public Task<List<Message>> getMessages(Channel channel, int totalLimit = 100, bool updateNew = false)
-        {
-            //TODO this doesn't read inline image attachments like in #hall_of_fame. FIX!
-
-            string lastMessageId = null;
-            int messagesFetched = 0;
-            List<Message> allMessages = new List<Message>();
-
-            // updateNew bool means we find the most recent message in the database, and we fetch messages in reverse chronological order
-            // until we've reached a message older than the newest database message, then we abort because now we're current.
-            DateTime maxDateTime = DateTime.MinValue;
-            if (updateNew)
-            {
-                string selectQuery = $"SELECT ifnull(max(TIMESTAMP),-1) as lastMsgDate FROM messages where channelId = {channel.Id}";
-                using (var command = new MySqlCommand(selectQuery, dbConnection))
-                {
-                    using (var reader = command.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            string result = reader["lastMsgDate"].ToString();
-                            if (result == "-1")
-                            {
-                                // we have NO messages for this channel, so let's get everything!
-                                maxDateTime = DateTime.MinValue;
-                            }
-                            else
-                            {
-                                maxDateTime = DateTime.Parse(reader["lastMsgDate"].ToString());
-                            }
-                        }
-                    }
-                }
-            }
-            Console.WriteLine($"Getting All New Messages after last date of {maxDateTime}");
-
-            DateTime lastTimeStamp = DateTime.MinValue;
-            int loop = 1;
-            int remainingMessages = totalLimit - messagesFetched;
-
-            bool breakLoop = false;
-            while (remainingMessages > 0 && breakLoop == false)
-            {
-                
-                int fetchCount = remainingMessages > messagesPerFetch ? messagesPerFetch : remainingMessages;
-
-                string url = $"https://discord.com/api/v9/channels/{channel.Id}/messages?limit={fetchCount}";
-
-                if (lastMessageId != null)
-                {
-                    url += $"&before={lastMessageId}";
-                }
-                else if (startingMsgId != -1)
-                {
-                    Console.WriteLine($"  and before messageId {startingMsgId}");
-                    url += $"&before={startingMsgId}";
-                }
-
-                //Console.WriteLine(url);
-                WriteMulticolorLine(new List<(string Text, ConsoleColor Color)> {
-                    (channel.Name, ConsoleColor.Blue),
-                    (" | ", ConsoleColor.White),
-                    ($"{messagesFetched} / {totalLimit}", ConsoleColor.Yellow),
-                    (" | ", ConsoleColor.White),
-                    (lastTimeStamp.ToString("yyyy-MM-dd HH:mm:ss"), ConsoleColor.DarkMagenta)
-                });
-                //Console.WriteLine($"{channel.Name} | {messagesFetched} / {totalLimit}  {lastTimeStamp}");
-
-                prepareClient(url, new HttpMethod("GET"));
-                HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    List<Message> messages = new List<Message>();
-                    string responseBody = "";
-                    try
-                    {
-                        responseBody = await response.Content.ReadAsStringAsync();
-                        SaveResponse(responseBody);
-                        //Console.WriteLine($"{responseBody}");
-                        messages = JsonConvert.DeserializeObject<Message[]>(responseBody).ToList<Message>();
-
-                        foreach (var message in messages)
-                        {
-                            DateTime date = message.Timestamp;
-                            lastTimeStamp = date;
-                            message.json = JsonConvert.SerializeObject(message);
-                            //Console.WriteLine($"JSON: {message.json}");
-                            if (updateNew && (lastTimeStamp < maxDateTime) && startingMsgId == -1)
-                            {
-                                // We've come to a message older than the newest message in the database (and we're not starting in the past), so we're all caught up!
-                                Console.WriteLine($"{lastTimeStamp} < {maxDateTime}, all caught up, breaking out of loop!");
-                                breakLoop = true;
-                                break;
-                            }
-                            allMessages.Add(message);
-                            SaveMessage(message);
-                        }
-
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"FAILED parsing message! {responseBody}. {ex.Message} {ex.StackTrace}");
-                    }
-
-                    messagesFetched += messages.Count();
-                    if (messages.Count() > 0)
-                    {
-                        lastMessageId = messages[messages.Count() - 1].Id;
-                    }
-
-                    remainingMessages = totalLimit - messagesFetched;
-
-                    if (messages.Count() < messagesPerFetch)
-                    {
-                        remainingMessages = 0;
-                    }
-
-                }
-                else
-                {
-                    Console.WriteLine($"ERROR happening getting messages! {url}. {response.StatusCode} ({(int)response.StatusCode})");
-                    break;
-                }
-
-                //Console.WriteLine($"Response Status Code: {response.StatusCode} ({(int)response.StatusCode})");
-                //Console.WriteLine($"Response Body: {responseBody}");
-
-                loop++;
-            }
-
-            //TODO fix this, I don't understand what this does; it only affects the output. not the query, what was I trying to do with this?!
-            if (orderBy == "desc")
-            {
-                allMessages.Reverse();
-            }
-            
-
-            return (allMessages);
-        }
 
 
 
@@ -1797,54 +1394,6 @@ namespace Disctalk
             }
 
             return (rv);
-        }
-        async static public Task<bool> sendText()
-        {
-            bool rv = false;
-
-            string url = $"https://discord.com/api/v9/channels/{channelId}/messages";
-            prepareClient(url, new HttpMethod("POST"));
-
-            var obj = new { content = textToSend };
-            string jsonContent = JsonConvert.SerializeObject(obj);
-
-            httpRequest.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
-            HttpResponseMessage response = await httpClient.SendAsync(httpRequest);
-            string responseBody = await response.Content.ReadAsStringAsync();
-
-            Console.WriteLine($"Request: {jsonContent}");
-            Console.WriteLine($"Response Status Code: {response.StatusCode} ({(int)response.StatusCode})");
-            Console.WriteLine($"Response Body: {responseBody}");
-
-            return (rv);
-        }
-
-        static public void prepareClient(string url, HttpMethod method)
-        {
-
-            var handler = new HttpClientHandler();
-            handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip |
-                                             System.Net.DecompressionMethods.Deflate;
-
-            httpClient = new HttpClient(handler);
-            httpRequest = new HttpRequestMessage(method, url);
-            httpRequest.Headers.TryAddWithoutValidation("Authorization", $"{token}");
-            httpRequest.Headers.TryAddWithoutValidation("Content-Type", "application/json");
-            httpRequest.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9042 Chrome/120.0.6099.291 Electron/28.2.10 Safari/537.36");
-            httpRequest.Headers.TryAddWithoutValidation("Accept", "*/*");
-            httpRequest.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
-            httpRequest.Headers.TryAddWithoutValidation("Accept-Language", "en-US");
-            httpRequest.Headers.TryAddWithoutValidation("Origin", "https://discord.com");
-            httpRequest.Headers.TryAddWithoutValidation("Sec-Ch-Ua", "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\"");
-            httpRequest.Headers.TryAddWithoutValidation("Sec-Ch-Ua-Mobile", "?0");
-            httpRequest.Headers.TryAddWithoutValidation("Sec-Ch-Ua-Platform", "\"Windows\"");
-            httpRequest.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
-            httpRequest.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
-            httpRequest.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
-            httpRequest.Headers.TryAddWithoutValidation("X-Debug-Options", "bugReporterEnabled");
-            httpRequest.Headers.TryAddWithoutValidation("X-Discord-Locale:", "en-US");
-            httpRequest.Headers.TryAddWithoutValidation("X-Discord-Timezone", "America/Los_Angeles");
         }
 
 
