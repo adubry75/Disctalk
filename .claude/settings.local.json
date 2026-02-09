@@ -5,7 +5,8 @@
       "Bash(powershell.exe -File - <<'EOF'\n$path = 'C:\\\\Users\\\\adubr\\\\source\\\\repos\\\\Disctalk\\\\Disctalk\\\\Program.cs'\n$lines = [System.IO.File]::ReadAllLines\\($path\\)\n\n# Step 1: Remove model classes block \\(indices 1871-2626\\)\n$newLines = [System.Collections.Generic.List[string]]::new\\($lines\\)\n$newLines.RemoveRange\\(1871, 2626 - 1871 + 1\\)\n\n# Step 2: Remove wordCount class \\(indices 711-721, blank+class\\)\n$newLines.RemoveRange\\(711, 721 - 711 + 1\\)\n\n# Step 3: Add \"using Disctalk.Models;\" after the last using line\n# Find the index of \"using System.Runtime.CompilerServices;\"\n$insertIdx = -1\nfor \\($i = 0; $i -lt $newLines.Count; $i++\\) {\n    if \\($newLines[$i] -match '^using '\\) {\n        $insertIdx = $i\n    }\n}\nWrite-Host \"Last using line index: $insertIdx, content: '$\\($newLines[$insertIdx]\\)'\"\n$newLines.Insert\\($insertIdx + 1, 'using Disctalk.Models;'\\)\n\n# Write back\n[System.IO.File]::WriteAllLines\\($path, $newLines, [System.Text.UTF8Encoding]::new\\($true\\)\\)\nWrite-Host \"Done. New line count: $\\($newLines.Count\\)\"\nEOF)",
       "Bash(powershell.exe -File - <<'EOF'\nSet-Location 'C:\\\\Users\\\\adubr\\\\source\\\\repos\\\\Disctalk\\\\Disctalk'\n& 'C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\MSBuild.exe' Disctalk.csproj /p:Configuration=Debug /nologo 2>&1\nEOF)",
       "Bash(powershell.exe -File:*)",
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }
