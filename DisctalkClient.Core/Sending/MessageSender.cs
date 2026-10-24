@@ -83,9 +83,6 @@ public sealed class MessageSender(IBotRestApi rest, WebhookDirectory webhooks, I
     public bool CanEdit(ChatMessage message) =>
         message.WebhookId is not null ? webhooks.IsOwnWebhook(message.WebhookId) : message.Author.Id == botUserId();
 
-    /// <summary>The bot can delete its own and its webhook's messages; anyone else's needs Manage Messages (Discord decides).</summary>
-    public bool CanDelete(ChatMessage message) => true;
-
     public async Task<ChatMessage?> EditAsync(ChatMessage message, string newContent, CancellationToken cancellationToken = default)
     {
         newContent = newContent.TrimEnd();

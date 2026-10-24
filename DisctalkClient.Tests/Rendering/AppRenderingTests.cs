@@ -204,4 +204,40 @@ public class AppRenderingTests : UiTestBase
         Assert.NotNull(cut.Find(".dt-setup"));
         Assert.Equal(ConnectionState.Disconnected, Client.State);
     }
+
+    [Fact]
+    public async Task Components_unsubscribe_from_client_events_when_disposed()
+    {
+        await Tokens.SaveTokenAsync(TestData.Token);
+        var cut = Render<DisctalkApp>();
+        await cut.InvokeAsync(() => Conn.LoginAsync());
+        Assert.True(ChangedHandlerCount() > 0);
+
+        await DisposeComponentsAsync();
+
+        // A component that subscribed twice would leave a handler (and itself) behind here.
+        Assert.Equal(0, ChangedHandlerCount());
+    }
+
+    [Fact]
+    public async Task Tapping_a_message_toggles_its_action_bar()
+    {
+        await LoginAsync();
+        Conn.Rest.GetMessagesBeforeAsync(default, default, default).ReturnsForAnyArgs([TestData.Message("tap me", TestData.Ada)]);
+        Ui.SelectChannel(TestData.GuildId, TestData.GeneralId);
+        var cut = Render<ChatPane>();
+        // Scrollback that completes synchronously must still show up (regression).
+        cut.WaitForAssertion(() => cut.Find(".dt-message"));
+
+        cut.Find(".dt-message").Click();
+        Assert.Contains("selected", cut.Find(".dt-message").ClassList);
+        cut.Find(".dt-message").Click();
+        Assert.DoesNotContain("selected", cut.Find(".dt-message").ClassList);
+    }
+
+    int ChangedHandlerCount()
+    {
+        var field = typeof(Core.State.ChatClient).GetField("Changed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        return (field.GetValue(Client) as Delegate)?.GetInvocationList().Length ?? 0;
+    }
 }

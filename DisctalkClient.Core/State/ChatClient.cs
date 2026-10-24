@@ -502,8 +502,11 @@ public sealed class ChatClient : IAsyncDisposable
         if (!isEdit)
         {
             if (_typing.Stop(message.ChannelId, message.Author.Id)) Raise(new ClientChange(ChangeKind.Typing, message.GuildId, message.ChannelId));
+            // Our own messages and messages in the open channel count as read.
             bool own = message.Author.Id == CurrentUser?.Id || _webhooks?.IsOwnWebhook(message.WebhookId) == true;
-            if (_unread.OnMessage(message.ChannelId, message.Id, isActiveChannel: own || ActiveChannelId == message.ChannelId) || ActiveChannelId == message.ChannelId)
+            bool viewing = ActiveChannelId == message.ChannelId;
+            bool becameUnread = _unread.OnMessage(message.ChannelId, message.Id, isActiveChannel: own || viewing);
+            if (becameUnread || viewing || own)
             {
                 QueueUnreadSave();
                 Raise(new ClientChange(ChangeKind.Unread, message.GuildId, message.ChannelId));

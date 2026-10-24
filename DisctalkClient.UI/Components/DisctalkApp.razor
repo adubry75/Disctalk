@@ -55,7 +55,6 @@
 
     protected override async Task OnInitializedAsync()
     {
-        base.OnInitialized();
         await Settings.LoadAsync();
         var token = await Tokens.GetTokenAsync();
         _needsToken = string.IsNullOrWhiteSpace(token);

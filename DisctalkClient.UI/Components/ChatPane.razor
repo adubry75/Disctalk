@@ -1,8 +1,8 @@
 @inherits ClientComponentBase
 
-<main class="dt-chat" @onclick="() => _selectedId = null">
+<main class="dt-chat">
     <header class="dt-chat-header">
-        <button class="dt-icon-btn dt-mobile-only" title="Channels" aria-label="Open channels" @onclick="Ui.ToggleChannelDrawer" @onclick:stopPropagation="true"><Icon Name="menu" /></button>
+        <button class="dt-icon-btn dt-mobile-only" title="Channels" aria-label="Open channels" @onclick="Ui.ToggleChannelDrawer"><Icon Name="menu" /></button>
         @if (Channel is { } channel)
         {
             <Icon Name="@(channel.Kind == ChannelKind.Announcement ? "announce" : "hash")" Class="dt-chat-header-icon" />
@@ -14,13 +14,13 @@
         }
         <span class="dt-spacer"></span>
         <button class="dt-icon-btn dt-desktop-only @(Ui.MemberListVisible ? "active" : "")" title="Member list" aria-label="Toggle member list" @onclick="Ui.ToggleMemberList"><Icon Name="users" /></button>
-        <button class="dt-icon-btn dt-mobile-only" title="Members" aria-label="Open members" @onclick="Ui.ToggleMemberDrawer" @onclick:stopPropagation="true"><Icon Name="users" /></button>
+        <button class="dt-icon-btn dt-mobile-only" title="Members" aria-label="Open members" @onclick="Ui.ToggleMemberDrawer"><Icon Name="users" /></button>
     </header>
 
     @if (Channel is { } current)
     {
         <MessageList ChannelId="current.Id" SelectedId="_selectedId"
-                     OnSelect="m => _selectedId = m.Id" OnReply="Ui.StartReply" OnEdit="Ui.StartEdit" OnDelete="RequestDelete"
+                     OnSelect="ToggleSelected" OnReply="Ui.StartReply" OnEdit="Ui.StartEdit" OnDelete="RequestDelete"
                      OnPickReaction="m => _reactingTo = m" OnToggleReaction="ToggleReaction" />
         <TypingIndicator ChannelId="current.Id" />
         <Composer ChannelId="current.Id" GuildId="current.GuildId" />
@@ -70,6 +70,9 @@
 
     protected override bool Handles(ClientChange change) =>
         change.Kind is ChangeKind.Connection or ChangeKind.Guilds || (change.Kind == ChangeKind.Channels && change.ChannelId == Ui.ChannelId);
+
+    // Tap a message to show its actions (touch screens have no hover); tap again to hide them.
+    void ToggleSelected(ChatMessage m) => _selectedId = _selectedId == m.Id ? null : m.Id;
 
     async Task RequestDelete((ChatMessage Message, bool SkipConfirm) request)
     {

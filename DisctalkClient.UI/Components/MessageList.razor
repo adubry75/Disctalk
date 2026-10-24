@@ -21,10 +21,12 @@
         </div>
 
         @{
+            // Read at render time: a snapshot taken earlier can predate a scrollback page that completed synchronously.
+            var messages = Client.GetMessages(ChannelId);
             ChatMessage? previous = null;
             var zone = TimeProvider.System.LocalTimeZone;
         }
-        @foreach (var m in _messages)
+        @foreach (var m in messages)
         {
             @if (MessageGrouping.StartsNewDay(previous, m, zone))
             {
@@ -51,7 +53,6 @@
     [Parameter] public EventCallback<(ChatMessage Message, EmojiRef Emoji)> OnToggleReaction { get; set; }
 
     ElementReference _scroller, _sentinel;
-    IReadOnlyList<ChatMessage> _messages = [];
     DotNetObjectReference<MessageList>? _self;
     IJSObjectReference? _observer;
     ulong _loadedChannel;
@@ -74,7 +75,6 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        _messages = Client.GetMessages(ChannelId);
         if (_loadedChannel != ChannelId)
         {
             _loadedChannel = ChannelId;
@@ -85,7 +85,6 @@
 
     protected override bool ShouldRender()
     {
-        _messages = Client.GetMessages(ChannelId);
         if (!ReferenceEquals(_lastSettings, S))
         {
             _lastSettings = S;
