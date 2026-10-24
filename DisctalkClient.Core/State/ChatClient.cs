@@ -1,0 +1,546 @@
+using DisctalkClient.Core.Abstractions;
+using DisctalkClient.Core.Models;
+using DisctalkClient.Core.Security;
+using DisctalkClient.Core.Sending;
+using DisctalkClient.Core.Settings;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace DisctalkClient.Core.State;
+
+public enum ChangeKind { Connection, Guilds, Channels, Members, Roles, Emojis, Messages, Typing, Unread }
+
+public sealed record ClientChange(ChangeKind Kind, ulong? GuildId = null, ulong? ChannelId = null);
+
+/// <summary>
+/// The client's in-memory view of Discord: guilds, channels, roles, members, emoji, per-channel message caches,
+/// typing and unread state. Fed by gateway events; the UI reads snapshots and listens to <see cref="Changed"/>.
+/// Gateway events arrive on background threads, so all state is guarded by one lock and <see cref="Changed"/>
+/// fires outside it.
+/// </summary>
+public sealed class ChatClient : IAsyncDisposable
+{
+    public const int HistoryPageSize = 50;
+    public const string UnreadStorageKey = "disctalkclient.lastread";
+    static readonly TimeSpan TypingResendInterval = TimeSpan.FromSeconds(8);
+
+    readonly IDiscordConnectionFactory _factory;
+    readonly IWebhookExecutor _webhookExecutor;
+    readonly SettingsService _settings;
+    readonly ISettingsStore _store;
+    readonly TimeProvider _time;
+    readonly ILogger _log;
+
+    readonly Lock _lock = new();
+    readonly Dictionary<ulong, GuildState> _guilds = new();
+    readonly Dictionary<ulong, ChannelInfo> _channels = new();
+    readonly Dictionary<ulong, MessageCache> _messages = new();
+    readonly HashSet<ulong> _historyLoading = new();
+    readonly Dictionary<ulong, DateTimeOffset> _typingSentAt = new();
+    readonly UnreadTracker _unread = new();
+    readonly TypingTracker _typing;
+
+    IDiscordConnection? _connection;
+    MessageSender? _sender;
+    WebhookDirectory? _webhooks;
+    int _unreadSaveQueued;
+
+    public ChatClient(
+        IDiscordConnectionFactory factory,
+        IWebhookExecutor webhookExecutor,
+        SettingsService settings,
+        ISettingsStore store,
+        TimeProvider time,
+        ILogger<ChatClient>? logger = null)
+    {
+        _factory = factory;
+        _webhookExecutor = webhookExecutor;
+        _settings = settings;
+        _store = store;
+        _time = time;
+        _log = logger ?? (ILogger)NullLogger.Instance;
+        _typing = new TypingTracker(time);
+    }
+
+    public event Action<ClientChange>? Changed;
+
+    public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
+    public string? StatusDetail { get; private set; }
+    public AuthorInfo? CurrentUser { get; private set; }
+    public ulong? ActiveChannelId { get; private set; }
+
+    sealed class GuildState(GuildInfo info)
+    {
+        public GuildInfo Info = info;
+        public readonly Dictionary<ulong, RoleInfo> Roles = new();
+        public readonly Dictionary<ulong, MemberInfo> Members = new();
+        public readonly Dictionary<ulong, GuildEmojiInfo> Emojis = new();
+    }
+
+    // ---------------------------------------------------------------- connection
+
+    public async Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
+    {
+        if (BotTokenValidator.Validate(botToken) is { } problem) throw new ArgumentException(problem, nameof(botToken));
+        await DisconnectAsync().ConfigureAwait(false);
+
+        _unread.Restore(await _store.GetAsync(UnreadStorageKey).ConfigureAwait(false));
+
+        var connection = _factory.Create(BotTokenValidator.Normalize(botToken));
+        _webhooks = new WebhookDirectory(connection.Rest, () => CurrentUser?.Id);
+        _sender = new MessageSender(connection.Rest, _webhooks, _webhookExecutor, _settings, () => CurrentUser?.Id);
+        connection.EventReceived += OnEventAsync;
+        _connection = connection;
+
+        SetState(ConnectionState.Connecting, "Connecting to Discord…");
+        try
+        {
+            await connection.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning("Gateway start failed: {Error}", SecretRedactor.Redact(ex.Message));
+            SetState(ConnectionState.Failed, "Couldn't connect: " + SecretRedactor.Redact(ex.Message));
+            throw;
+        }
+    }
+
+    public async Task DisconnectAsync()
+    {
+        var connection = _connection;
+        _connection = null;
+        _sender = null;
+        _webhooks = null;
+        if (connection is not null)
+        {
+            connection.EventReceived -= OnEventAsync;
+            try { await connection.StopAsync().ConfigureAwait(false); } catch (Exception ex) { _log.LogDebug("Stop failed: {Error}", SecretRedactor.Redact(ex.Message)); }
+            await connection.DisposeAsync().ConfigureAwait(false);
+        }
+        lock (_lock)
+        {
+            _guilds.Clear();
+            _channels.Clear();
+            _messages.Clear();
+            _historyLoading.Clear();
+            CurrentUser = null;
+        }
+        SetState(ConnectionState.Disconnected, null);
+        Raise(new ClientChange(ChangeKind.Guilds));
+    }
+
+    public ValueTask DisposeAsync() => new(DisconnectAsync());
+
+    void SetState(ConnectionState state, string? detail)
+    {
+        State = state;
+        StatusDetail = detail;
+        Raise(new ClientChange(ChangeKind.Connection));
+    }
+
+    // ---------------------------------------------------------------- queries
+
+    public IReadOnlyList<GuildInfo> Guilds
+    {
+        get { lock (_lock) return _guilds.Values.Select(g => g.Info).OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList(); }
+    }
+
+    public GuildInfo? GetGuild(ulong guildId)
+    {
+        lock (_lock) return _guilds.GetValueOrDefault(guildId)?.Info;
+    }
+
+    public IReadOnlyList<ChannelInfo> GetChannels(ulong guildId)
+    {
+        lock (_lock) return _channels.Values.Where(c => c.GuildId == guildId).ToList();
+    }
+
+    public ChannelInfo? GetChannel(ulong channelId)
+    {
+        lock (_lock) return _channels.GetValueOrDefault(channelId);
+    }
+
+    public IReadOnlyDictionary<ulong, RoleInfo> GetRoles(ulong guildId)
+    {
+        lock (_lock) return _guilds.TryGetValue(guildId, out var g) ? new Dictionary<ulong, RoleInfo>(g.Roles) : new Dictionary<ulong, RoleInfo>();
+    }
+
+    public RoleInfo? GetRole(ulong guildId, ulong roleId)
+    {
+        lock (_lock) return _guilds.GetValueOrDefault(guildId)?.Roles.GetValueOrDefault(roleId);
+    }
+
+    public IReadOnlyList<MemberInfo> GetMembers(ulong guildId)
+    {
+        lock (_lock) return _guilds.TryGetValue(guildId, out var g) ? g.Members.Values.ToList() : [];
+    }
+
+    public MemberInfo? GetMember(ulong guildId, ulong userId)
+    {
+        lock (_lock) return _guilds.GetValueOrDefault(guildId)?.Members.GetValueOrDefault(userId);
+    }
+
+    public string? GetNameColor(ulong guildId, ulong userId)
+    {
+        lock (_lock)
+            return _guilds.TryGetValue(guildId, out var g) ? MemberGrouping.NameColor(g.Members.GetValueOrDefault(userId), g.Roles) : null;
+    }
+
+    public IReadOnlyList<GuildEmojiInfo> GetEmojis(ulong guildId)
+    {
+        lock (_lock) return _guilds.TryGetValue(guildId, out var g) ? g.Emojis.Values.OrderBy(e => e.Name).ToList() : [];
+    }
+
+    public IReadOnlyList<ChatMessage> GetMessages(ulong channelId)
+    {
+        lock (_lock) return _messages.TryGetValue(channelId, out var cache) ? cache.Snapshot() : [];
+    }
+
+    public ChatMessage? GetMessage(ulong channelId, ulong messageId)
+    {
+        lock (_lock) return _messages.GetValueOrDefault(channelId)?.Get(messageId);
+    }
+
+    public bool HasMoreHistory(ulong channelId)
+    {
+        lock (_lock) return !_messages.TryGetValue(channelId, out var cache) || cache.HasMoreBefore;
+    }
+
+    public bool IsHistoryLoaded(ulong channelId)
+    {
+        lock (_lock) return _messages.TryGetValue(channelId, out var cache) && cache.IsInitialized;
+    }
+
+    public bool IsLoadingHistory(ulong channelId)
+    {
+        lock (_lock) return _historyLoading.Contains(channelId);
+    }
+
+    public bool IsUnread(ulong channelId) => _unread.IsUnread(channelId);
+
+    public IReadOnlyList<string> GetTypingNames(ulong channelId) => _typing.GetTypingNames(channelId, CurrentUser?.Id);
+
+    public bool CanEdit(ChatMessage message) => _sender?.CanEdit(message) ?? false;
+
+    // ---------------------------------------------------------------- navigation & history
+
+    public void SetActiveChannel(ulong? channelId)
+    {
+        ActiveChannelId = channelId;
+        if (channelId is not ulong id) return;
+        if (_unread.MarkRead(id)) QueueUnreadSave();
+        Raise(new ClientChange(ChangeKind.Unread, GetChannel(id)?.GuildId, id));
+
+        var guildId = GetChannel(id)?.GuildId;
+        if (_settings.Current.LastChannelId != id)
+            _ = _settings.UpdateAsync(s => s with { LastChannelId = id, LastGuildId = guildId ?? s.LastGuildId });
+
+        // Resolve our webhook early so the edit/delete buttons know which webhook messages are ours.
+        if (_webhooks is { } hooks && hooks.TryGetCached(id) is null)
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (await hooks.FindAsync(id).ConfigureAwait(false) is not null) Raise(new ClientChange(ChangeKind.Messages, guildId, id));
+                }
+                catch (Exception ex) { _log.LogDebug("Webhook lookup failed: {Error}", SecretRedactor.Redact(ex.Message)); }
+            });
+    }
+
+    /// <summary>Loads the newest page for a channel the first time it's opened.</summary>
+    public async Task EnsureHistoryAsync(ulong channelId, CancellationToken cancellationToken = default)
+    {
+        if (IsHistoryLoaded(channelId)) return;
+        await LoadOlderAsync(channelId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Fetches the next page of scrollback (REST pagination with <c>before</c>).</summary>
+    /// <returns>How many messages were added.</returns>
+    public async Task<int> LoadOlderAsync(ulong channelId, CancellationToken cancellationToken = default)
+    {
+        var rest = _connection?.Rest ?? throw new InvalidOperationException("Not connected.");
+        ulong? before;
+        lock (_lock)
+        {
+            var cache = GetCache(channelId);
+            if ((cache.IsInitialized && !cache.HasMoreBefore) || !_historyLoading.Add(channelId)) return 0;
+            // The first page starts from the newest message; live messages that arrived meanwhile dedupe on merge.
+            before = cache.IsInitialized ? cache.OldestId : null;
+        }
+        Raise(new ClientChange(ChangeKind.Messages, null, channelId));
+        try
+        {
+            var page = await rest.GetMessagesBeforeAsync(channelId, before, HistoryPageSize, cancellationToken).ConfigureAwait(false);
+            var guildId = GetChannel(channelId)?.GuildId;
+            lock (_lock) GetCache(channelId).AddHistoryPage(page.Select(m => WithGuild(m, guildId)).ToList(), HistoryPageSize);
+            return page.Count;
+        }
+        finally
+        {
+            lock (_lock) _historyLoading.Remove(channelId);
+            Raise(new ClientChange(ChangeKind.Messages, null, channelId));
+        }
+    }
+
+    // ---------------------------------------------------------------- actions
+
+    MessageSender Sender => _sender ?? throw new InvalidOperationException("Not connected.");
+    IBotRestApi Rest => _connection?.Rest ?? throw new InvalidOperationException("Not connected.");
+
+    public async Task SendAsync(OutgoingMessage message, CancellationToken cancellationToken = default)
+    {
+        var sent = await Sender.SendAsync(message, cancellationToken).ConfigureAwait(false);
+        lock (_lock) _typingSentAt.Remove(message.ChannelId);
+        if (sent is not null) Ingest(sent, isEdit: false);
+    }
+
+    public async Task EditAsync(ChatMessage message, string newContent, CancellationToken cancellationToken = default)
+    {
+        var edited = await Sender.EditAsync(message, newContent, cancellationToken).ConfigureAwait(false);
+        if (edited is not null) Ingest(edited, isEdit: true);
+    }
+
+    public async Task DeleteAsync(ChatMessage message, CancellationToken cancellationToken = default)
+    {
+        await Sender.DeleteAsync(message, cancellationToken).ConfigureAwait(false);
+        lock (_lock) _messages.GetValueOrDefault(message.ChannelId)?.Remove([message.Id]);
+        Raise(new ClientChange(ChangeKind.Messages, message.GuildId, message.ChannelId));
+    }
+
+    /// <summary>Adds the bot's reaction, or removes it if the bot already reacted with that emoji.</summary>
+    public async Task ToggleReactionAsync(ChatMessage message, EmojiRef emoji, CancellationToken cancellationToken = default)
+    {
+        var current = GetMessage(message.ChannelId, message.Id) ?? message;
+        bool mine = current.Reactions.Any(r => r.Emoji.Matches(emoji) && r.Me);
+        if (mine) await Rest.RemoveOwnReactionAsync(message.ChannelId, message.Id, emoji, cancellationToken).ConfigureAwait(false);
+        else await Rest.AddReactionAsync(message.ChannelId, message.Id, emoji, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Call on keystrokes in the composer; sends the typing indicator at most every 8 seconds (bot mode only).</summary>
+    public async Task NotifyTypingAsync(ulong channelId)
+    {
+        var s = _settings.Current;
+        if (!s.SendTypingIndicator || s.SendMode != SendMode.Bot || _connection is null) return;
+        var now = _time.GetUtcNow();
+        lock (_lock)
+        {
+            if (_typingSentAt.TryGetValue(channelId, out var last) && now - last < TypingResendInterval) return;
+            _typingSentAt[channelId] = now;
+        }
+        try { await Rest.TriggerTypingAsync(channelId).ConfigureAwait(false); }
+        catch (Exception ex) { _log.LogDebug("Typing indicator failed: {Error}", SecretRedactor.Redact(ex.Message)); }
+    }
+
+    // ---------------------------------------------------------------- gateway events
+
+    internal ValueTask OnEventAsync(GatewayEvent e)
+    {
+        try
+        {
+            Apply(e);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError("Failed to apply {Event}: {Error}", e.GetType().Name, SecretRedactor.Redact(ex.Message));
+        }
+        return ValueTask.CompletedTask;
+    }
+
+    void Apply(GatewayEvent e)
+    {
+        switch (e)
+        {
+            case ConnectionStateChangedEvent s:
+                SetState(s.State, s.Detail);
+                break;
+
+            case ReadyEvent r:
+                CurrentUser = r.CurrentUser;
+                SetState(ConnectionState.Connected, null);
+                break;
+
+            case GuildAvailableEvent g:
+                lock (_lock)
+                {
+                    var state = new GuildState(g.Snapshot.Guild);
+                    foreach (var role in g.Snapshot.Roles) state.Roles[role.Id] = role;
+                    foreach (var m in g.Snapshot.Members) state.Members[m.UserId] = m;
+                    foreach (var emoji in g.Snapshot.Emojis) state.Emojis[emoji.Id] = emoji;
+                    _guilds[g.Snapshot.Guild.Id] = state;
+                    foreach (var stale in _channels.Values.Where(c => c.GuildId == g.Snapshot.Guild.Id).Select(c => c.Id).ToList()) _channels.Remove(stale);
+                    foreach (var c in g.Snapshot.Channels)
+                    {
+                        _channels[c.Id] = c;
+                        if (c.IsMessageable) _unread.TrackChannel(c.Id, c.LastMessageId);
+                    }
+                }
+                Raise(new ClientChange(ChangeKind.Guilds, g.Snapshot.Guild.Id));
+                break;
+
+            case GuildUpdatedEvent g:
+                lock (_lock) if (_guilds.TryGetValue(g.Guild.Id, out var gs)) gs.Info = g.Guild;
+                Raise(new ClientChange(ChangeKind.Guilds, g.Guild.Id));
+                break;
+
+            case GuildRemovedEvent g:
+                lock (_lock)
+                {
+                    _guilds.Remove(g.GuildId);
+                    foreach (var id in _channels.Values.Where(c => c.GuildId == g.GuildId).Select(c => c.Id).ToList()) _channels.Remove(id);
+                }
+                Raise(new ClientChange(ChangeKind.Guilds, g.GuildId));
+                break;
+
+            case ChannelUpsertEvent c:
+                lock (_lock)
+                {
+                    _channels[c.Channel.Id] = c.Channel;
+                    if (c.Channel.IsMessageable) _unread.TrackChannel(c.Channel.Id, c.Channel.LastMessageId);
+                }
+                Raise(new ClientChange(ChangeKind.Channels, c.Channel.GuildId, c.Channel.Id));
+                break;
+
+            case ChannelDeleteEvent c:
+                lock (_lock)
+                {
+                    _channels.Remove(c.ChannelId);
+                    _messages.Remove(c.ChannelId);
+                }
+                Raise(new ClientChange(ChangeKind.Channels, c.GuildId, c.ChannelId));
+                break;
+
+            case RoleUpsertEvent r:
+                lock (_lock) if (_guilds.TryGetValue(r.Role.GuildId, out var gs)) gs.Roles[r.Role.Id] = r.Role;
+                Raise(new ClientChange(ChangeKind.Roles, r.Role.GuildId));
+                break;
+
+            case RoleDeleteEvent r:
+                lock (_lock) _guilds.GetValueOrDefault(r.GuildId)?.Roles.Remove(r.RoleId);
+                Raise(new ClientChange(ChangeKind.Roles, r.GuildId));
+                break;
+
+            case MembersUpsertEvent m:
+                lock (_lock)
+                    if (_guilds.TryGetValue(m.GuildId, out var gs))
+                        foreach (var member in m.Members) gs.Members[member.UserId] = member;
+                Raise(new ClientChange(ChangeKind.Members, m.GuildId));
+                break;
+
+            case MemberRemoveEvent m:
+                lock (_lock) _guilds.GetValueOrDefault(m.GuildId)?.Members.Remove(m.UserId);
+                Raise(new ClientChange(ChangeKind.Members, m.GuildId));
+                break;
+
+            case EmojisUpdateEvent em:
+                lock (_lock)
+                    if (_guilds.TryGetValue(em.GuildId, out var gs))
+                    {
+                        gs.Emojis.Clear();
+                        foreach (var emoji in em.Emojis) gs.Emojis[emoji.Id] = emoji;
+                    }
+                Raise(new ClientChange(ChangeKind.Emojis, em.GuildId));
+                break;
+
+            case MessageCreateEvent m:
+                Ingest(m.Message, isEdit: false);
+                break;
+
+            case MessageUpdateEvent m:
+                Ingest(m.Message, isEdit: true);
+                break;
+
+            case MessageDeleteEvent d:
+                bool removed;
+                lock (_lock) removed = _messages.GetValueOrDefault(d.ChannelId)?.Remove(d.MessageIds) ?? false;
+                if (removed) Raise(new ClientChange(ChangeKind.Messages, GetChannel(d.ChannelId)?.GuildId, d.ChannelId));
+                break;
+
+            case ReactionAddEvent r:
+                ApplyReaction(r.ChannelId, r.MessageId, r.Emoji, +1, r.UserId);
+                break;
+
+            case ReactionRemoveEvent r:
+                ApplyReaction(r.ChannelId, r.MessageId, r.Emoji, -1, r.UserId);
+                break;
+
+            case ReactionClearEvent r:
+                bool cleared;
+                lock (_lock) cleared = _messages.GetValueOrDefault(r.ChannelId)?.ClearReactions(r.MessageId, r.Emoji) ?? false;
+                if (cleared) Raise(new ClientChange(ChangeKind.Messages, GetChannel(r.ChannelId)?.GuildId, r.ChannelId));
+                break;
+
+            case TypingStartEvent t:
+                if (t.UserId == CurrentUser?.Id) break;
+                var guild = GetChannel(t.ChannelId)?.GuildId;
+                var typist = t.Member ?? (guild is ulong gid ? GetMember(gid, t.UserId) : null);
+                _typing.Start(t.ChannelId, t.UserId, typist?.DisplayName ?? "Someone");
+                Raise(new ClientChange(ChangeKind.Typing, guild, t.ChannelId));
+                break;
+        }
+    }
+
+    void Ingest(ChatMessage message, bool isEdit)
+    {
+        var channel = GetChannel(message.ChannelId);
+        message = WithGuild(message, channel?.GuildId);
+        bool changed;
+        lock (_lock)
+        {
+            var cache = GetCache(message.ChannelId);
+            if (isEdit) changed = cache.Update(message);
+            else
+            {
+                cache.Upsert(message);
+                changed = true;
+            }
+        }
+
+        if (!isEdit)
+        {
+            if (_typing.Stop(message.ChannelId, message.Author.Id)) Raise(new ClientChange(ChangeKind.Typing, message.GuildId, message.ChannelId));
+            bool own = message.Author.Id == CurrentUser?.Id || _webhooks?.IsOwnWebhook(message.WebhookId) == true;
+            if (_unread.OnMessage(message.ChannelId, message.Id, isActiveChannel: own || ActiveChannelId == message.ChannelId) || ActiveChannelId == message.ChannelId)
+            {
+                QueueUnreadSave();
+                Raise(new ClientChange(ChangeKind.Unread, message.GuildId, message.ChannelId));
+            }
+        }
+        if (changed) Raise(new ClientChange(ChangeKind.Messages, message.GuildId, message.ChannelId));
+    }
+
+    void ApplyReaction(ulong channelId, ulong messageId, EmojiRef emoji, int delta, ulong userId)
+    {
+        bool changed;
+        lock (_lock) changed = _messages.GetValueOrDefault(channelId)?.ApplyReaction(messageId, emoji, delta, byMe: userId == CurrentUser?.Id) ?? false;
+        if (changed) Raise(new ClientChange(ChangeKind.Messages, GetChannel(channelId)?.GuildId, channelId));
+    }
+
+    static ChatMessage WithGuild(ChatMessage m, ulong? guildId) =>
+        m.GuildId is null && guildId is not null
+            ? m with { GuildId = guildId, ReplyTo = m.ReplyTo is { GuildId: null } r ? r with { GuildId = guildId } : m.ReplyTo }
+            : m;
+
+    MessageCache GetCache(ulong channelId)
+    {
+        if (!_messages.TryGetValue(channelId, out var cache)) _messages[channelId] = cache = new MessageCache();
+        return cache;
+    }
+
+    void QueueUnreadSave()
+    {
+        if (Interlocked.Exchange(ref _unreadSaveQueued, 1) == 1) return;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), _time).ConfigureAwait(false);
+            Interlocked.Exchange(ref _unreadSaveQueued, 0);
+            try { await _store.SetAsync(UnreadStorageKey, _unread.Serialize()).ConfigureAwait(false); }
+            catch (Exception ex) { _log.LogDebug("Saving read state failed: {Error}", ex.Message); }
+        });
+    }
+
+    void Raise(ClientChange change)
+    {
+        try { Changed?.Invoke(change); }
+        catch (Exception ex) { _log.LogError("Change handler threw: {Error}", ex.Message); }
+    }
+}

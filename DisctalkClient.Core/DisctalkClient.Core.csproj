@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Gateway + REST for the bot account. NetCord is .NET 10 native and updated weekly. -->
+    <PackageReference Include="NetCord" Version="1.0.0-beta.28" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reused: RateLimitHandler (per-bucket 429 handling) for webhook execution over plain HttpClient. -->
+    <ProjectReference Include="..\Disctalk.Core\Disctalk.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DisctalkClient.Tests" />
+  </ItemGroup>
+
+</Project>

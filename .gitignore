@@ -365,3 +365,11 @@ FodyWeavers.xsd
 .env
 *.token
 secrets.json
+
+# DisctalkClient: never commit secrets (bot token lives in SecureStorage / user-secrets / env vars)
+*.token
+.env
+.env.*
+secrets.json
+appsettings.*.local.json
+DisctalkClient.DevHost/devsettings.json

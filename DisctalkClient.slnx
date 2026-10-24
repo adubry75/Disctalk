@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Disctalk.Core/Disctalk.Core.csproj" />
+  <Project Path="DisctalkClient.Core/DisctalkClient.Core.csproj" />
+</Solution>
