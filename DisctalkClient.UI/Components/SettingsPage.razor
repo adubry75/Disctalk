@@ -1,0 +1,163 @@
+@inherits ClientComponentBase
+
+<div class="dt-settings" role="dialog" aria-labelledby="dt-settings-title">
+    <div class="dt-settings-inner">
+        <header class="dt-settings-header">
+            <h1 id="dt-settings-title"><Icon Name="settings" /> Settings</h1>
+            <button class="dt-icon-btn" title="Close (Esc)" aria-label="Close settings" @onclick="Ui.CloseSettings"><Icon Name="x" Size="24" /></button>
+        </header>
+
+        @if (_errors.Count > 0)
+        {
+            <div class="dt-settings-errors" role="alert">
+                @foreach (var e in _errors)
+                {
+                    <div>@e</div>
+                }
+            </div>
+        }
+
+        <section>
+            <h2>Appearance</h2>
+            <div class="dt-field">
+                <span class="dt-field-label">Theme</span>
+                <div class="dt-segmented" role="radiogroup" aria-label="Theme">
+                    @foreach (var theme in Enum.GetValues<ThemeMode>())
+                    {
+                        <button role="radio" aria-checked="@(S.Theme == theme)" class="@(S.Theme == theme ? "on" : "")" @onclick="() => Apply(s => s with { Theme = theme })">@theme</button>
+                    }
+                </div>
+            </div>
+            <div class="dt-field">
+                <span class="dt-field-label">Cat accent</span>
+                <div class="dt-swatches" role="radiogroup" aria-label="Accent color">
+                    @foreach (var accent in Enum.GetValues<CatAccent>())
+                    {
+                        <button role="radio" aria-checked="@(S.Accent == accent)" class="dt-swatch @(S.Accent == accent ? "on" : "")" title="@accent"
+                                style="--swatch:@ClientSettings.AccentHex(accent)" @onclick="() => Apply(s => s with { Accent = accent })">
+                            <Icon Name="paw" Size="16" /><span>@accent</span>
+                        </button>
+                    }
+                </div>
+            </div>
+            <label class="dt-toggle">
+                <input type="checkbox" checked="@S.CompactMode" @onchange="e => Apply(s => s with { CompactMode = (bool)e.Value! })" />
+                <span>Compact mode <small>one line per message, timestamp first</small></span>
+            </label>
+        </section>
+
+        <section>
+            <h2>Timestamps</h2>
+            <div class="dt-field">
+                <label class="dt-field-label" for="dt-ts-format">Format</label>
+                <input id="dt-ts-format" type="text" value="@_timestampFormat" @oninput="OnTimestampInput" @onchange="SaveTimestamp" spellcheck="false" />
+                <div class="dt-presets">
+                    @foreach (var (label, format) in TimestampPresets)
+                    {
+                        <button class="dt-chip @(S.TimestampFormat == format ? "on" : "")" @onclick="() => SetTimestamp(format)">@label</button>
+                    }
+                </div>
+                <div class="dt-preview">Preview: <strong>@Preview</strong></div>
+                <small class="dt-hint">.NET custom format. <code>h:mm:ss tt</code> = 3:04:05 PM, <code>HH:mm:ss</code> = 15:04:05.</small>
+            </div>
+        </section>
+
+        <section>
+            <h2>Sending</h2>
+            <div class="dt-field">
+                <span class="dt-field-label">Send messages as</span>
+                <div class="dt-segmented" role="radiogroup" aria-label="Send mode">
+                    <button role="radio" aria-checked="@(S.SendMode == SendMode.Bot)" class="@(S.SendMode == SendMode.Bot ? "on" : "")" @onclick="() => Apply(s => s with { SendMode = SendMode.Bot })"><Icon Name="bot" Size="16" /> The bot</button>
+                    <button role="radio" aria-checked="@(S.SendMode == SendMode.Webhook)" class="@(S.SendMode == SendMode.Webhook ? "on" : "")" @onclick="() => Apply(s => s with { SendMode = SendMode.Webhook })"><Icon Name="webhook" Size="16" /> Webhook persona</button>
+                </div>
+            </div>
+            <div class="dt-field">
+                <label class="dt-field-label" for="dt-wh-name">Webhook display name</label>
+                <input id="dt-wh-name" type="text" maxlength="80" placeholder="e.g. your name" value="@S.WebhookDisplayName"
+                       @onchange="e => Apply(s => s with { WebhookDisplayName = e.Value?.ToString() ?? string.Empty })" />
+            </div>
+            <div class="dt-field">
+                <label class="dt-field-label" for="dt-wh-avatar">Webhook avatar URL</label>
+                <div class="dt-avatar-field">
+                    @if (!string.IsNullOrWhiteSpace(S.WebhookAvatarUrl))
+                    {
+                        <img class="dt-avatar" src="@S.WebhookAvatarUrl" alt="Avatar preview" />
+                    }
+                    <input id="dt-wh-avatar" type="url" placeholder="https://…/avatar.png" value="@S.WebhookAvatarUrl"
+                           @onchange="e => Apply(s => s with { WebhookAvatarUrl = e.Value?.ToString() ?? string.Empty })" />
+                </div>
+                <small class="dt-hint">The bot creates one webhook named "Disctalk Client" per channel (needs Manage Webhooks). Replies sent this way include a link to the original, since webhooks can't make real replies.</small>
+            </div>
+            <label class="dt-toggle">
+                <input type="checkbox" checked="@S.PingOnReply" @onchange="e => Apply(s => s with { PingOnReply = (bool)e.Value! })" />
+                <span>Mention the author when replying</span>
+            </label>
+            <label class="dt-toggle">
+                <input type="checkbox" checked="@S.SendTypingIndicator" @onchange="e => Apply(s => s with { SendTypingIndicator = (bool)e.Value! })" />
+                <span>Show the bot as typing while I type <small>(bot mode)</small></span>
+            </label>
+            <label class="dt-toggle">
+                <input type="checkbox" checked="@S.AllowEveryoneMentions" @onchange="e => Apply(s => s with { AllowEveryoneMentions = (bool)e.Value! })" />
+                <span>Let my messages ping @@everyone / @@here</span>
+            </label>
+        </section>
+
+        <section>
+            <h2>Account</h2>
+            @if (Client.CurrentUser is { } me)
+            {
+                <div class="dt-account">
+                    <img class="dt-avatar" src="@me.AvatarUrl" alt="" />
+                    <div><strong>@me.DisplayName</strong><br /><small>@me.Username · bot</small></div>
+                </div>
+            }
+            <div class="dt-settings-row">
+                <button class="dt-btn" @onclick="() => Apply(_ => new ClientSettings { LastGuildId = S.LastGuildId, LastChannelId = S.LastChannelId })">Reset settings</button>
+                <button class="dt-btn danger" @onclick="OnSignOut"><Icon Name="logout" Size="16" /> Forget token &amp; disconnect</button>
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    public static readonly (string Label, string Format)[] TimestampPresets =
+    [
+        ("3:04:05 PM", ClientSettings.DefaultTimestampFormat),
+        ("3:04 PM", "h:mm tt"),
+        ("15:04:05", "HH:mm:ss"),
+        ("15:04", "HH:mm"),
+    ];
+
+    [Parameter] public EventCallback OnSignOut { get; set; }
+
+    IReadOnlyList<string> _errors = [];
+    string _timestampFormat = "";
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        _timestampFormat = S.TimestampFormat;
+    }
+
+    protected override bool Handles(ClientChange change) => change.Kind == ChangeKind.Connection;
+
+    string Preview => SettingsValidator.ValidateTimestampFormat(_timestampFormat) is { } error
+        ? error
+        : DateTimeOffset.Now.ToString(_timestampFormat, CultureInfo.CurrentCulture);
+
+    void OnTimestampInput(ChangeEventArgs e) => _timestampFormat = e.Value?.ToString() ?? "";
+
+    Task SaveTimestamp() => Apply(s => s with { TimestampFormat = _timestampFormat });
+
+    Task SetTimestamp(string format)
+    {
+        _timestampFormat = format;
+        return Apply(s => s with { TimestampFormat = format });
+    }
+
+    async Task Apply(Func<ClientSettings, ClientSettings> change)
+    {
+        var result = await Settings.UpdateAsync(change);
+        _errors = result.Errors;
+    }
+}

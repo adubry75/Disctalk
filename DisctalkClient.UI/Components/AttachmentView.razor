@@ -1,0 +1,60 @@
+@inject UiState Ui
+
+@if (Attachment.IsImage)
+{
+    <div class="dt-attachment-media @(Attachment.IsSpoiler && !_revealed ? "spoiler" : "")" @onclick="OnImageClick">
+        <img src="@ImageSrc" alt="@(Attachment.Description ?? Attachment.FileName)" loading="lazy"
+             width="@DisplayWidth" height="@DisplayHeight" />
+        @if (Attachment.IsSpoiler && !_revealed)
+        {
+            <span class="dt-spoiler-label">SPOILER</span>
+        }
+    </div>
+}
+else if (Attachment.IsVideo)
+{
+    <video class="dt-attachment-video" src="@Attachment.Url" controls preload="metadata"></video>
+}
+else
+{
+    <a class="dt-attachment-file" href="@Attachment.Url" target="_blank" rel="noopener noreferrer" download="@Attachment.FileName">
+        <Icon Name="file" Size="28" />
+        <span class="dt-attachment-name">@Attachment.FileName</span>
+        <small>@FormatSize(Attachment.Size)</small>
+    </a>
+}
+
+@code {
+    const int MaxWidth = 400, MaxHeight = 300;
+    bool _revealed;
+
+    [Parameter, EditorRequired] public AttachmentInfo Attachment { get; set; } = default!;
+
+    (int W, int H) Fit()
+    {
+        if (Attachment.Width is not int w || Attachment.Height is not int h || w == 0 || h == 0) return (0, 0);
+        double scale = Math.Min(1, Math.Min((double)MaxWidth / w, (double)MaxHeight / h));
+        return ((int)(w * scale), (int)(h * scale));
+    }
+
+    int? DisplayWidth => Fit().W is > 0 and var w ? w : null;
+    int? DisplayHeight => Fit().H is > 0 and var h ? h : null;
+
+    // Discord's media proxy resizes on the fly; ask for roughly what we display (x2 for high-DPI).
+    string ImageSrc => Attachment.ProxyUrl is { } proxy && DisplayWidth is int w && DisplayHeight is int h
+        ? $"{proxy}{(proxy.Contains('?') ? '&' : '?')}width={w * 2}&height={h * 2}"
+        : Attachment.ProxyUrl ?? Attachment.Url;
+
+    void OnImageClick()
+    {
+        if (Attachment.IsSpoiler && !_revealed) _revealed = true;
+        else Ui.ShowImage(Attachment.Url);
+    }
+
+    internal static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024):0.##} MB",
+    };
+}

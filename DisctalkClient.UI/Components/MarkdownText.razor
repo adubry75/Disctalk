@@ -1,0 +1,15 @@
+@inherits ComponentBase
+@inject ChatClient Client
+@inject TimestampFormatter Time
+
+@if (!string.IsNullOrEmpty(Text))
+{
+    <div class="md @Class">@((MarkupString)DiscordMarkdown.ToHtml(Text, new ClientMarkdownContext(Client, Time, GuildId), Options))</div>
+}
+
+@code {
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public ulong? GuildId { get; set; }
+    [Parameter] public MarkdownOptions? Options { get; set; }
+    [Parameter] public string? Class { get; set; }
+}

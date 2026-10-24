@@ -1,0 +1,26 @@
+@if (Reactions.Count > 0)
+{
+    <div class="dt-reactions">
+        @foreach (var r in Reactions)
+        {
+            <button class="dt-reaction @(r.Me ? "me" : "")" title="@Title(r)" aria-pressed="@r.Me" @onclick="() => OnToggle.InvokeAsync(r.Emoji)">
+                @if (r.Emoji.ImageUrl(32) is { } src)
+                {
+                    <img src="@src" alt=":@(r.Emoji.Name):" />
+                }
+                else
+                {
+                    <span class="dt-reaction-emoji">@r.Emoji.Name</span>
+                }
+                <span class="dt-reaction-count">@r.Count</span>
+            </button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ReactionInfo> Reactions { get; set; } = [];
+    [Parameter] public EventCallback<EmojiRef> OnToggle { get; set; }
+
+    static string Title(ReactionInfo r) => (r.Emoji.IsCustom ? $":{r.Emoji.Name}:" : r.Emoji.Name) + (r.Me ? " (you reacted)" : "");
+}

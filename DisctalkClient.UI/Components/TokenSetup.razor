@@ -1,0 +1,56 @@
+<div class="dt-setup">
+    <div class="dt-setup-card">
+        <div class="dt-setup-logo"><Icon Name="cat" Size="56" /></div>
+        <h1>Disctalk Client</h1>
+        <p>Connect with your <strong>bot</strong> account. The token is stored in this device's secure storage and only sent to Discord.</p>
+
+        @if (!string.IsNullOrEmpty(Error))
+        {
+            <div class="dt-setup-error" role="alert">@Error</div>
+        }
+
+        <label for="dt-token">Bot token</label>
+        <input id="dt-token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the token from Developer Portal → Bot"
+               @bind="_token" @bind:event="oninput" @onkeydown="OnKey" disabled="@Busy" />
+        @if (_validation is { } v)
+        {
+            <div class="dt-field-error">@v</div>
+        }
+        <button class="dt-btn primary" @onclick="Submit" disabled="@(Busy || string.IsNullOrWhiteSpace(_token))">
+            @(Busy ? "Connecting…" : "Connect")
+        </button>
+
+        <details class="dt-setup-help">
+            <summary>Where do I get a token?</summary>
+            <ol>
+                <li>Open the Discord Developer Portal → your application → <em>Bot</em>.</li>
+                <li>Turn on <em>Server Members Intent</em> and <em>Message Content Intent</em>.</li>
+                <li>Click <em>Reset Token</em> and copy it here. Never share it.</li>
+                <li>Invite the bot to your server with the link in the README.</li>
+            </ol>
+        </details>
+    </div>
+</div>
+
+@code {
+    string _token = "";
+    string? _validation;
+
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Submit();
+    }
+
+    async Task Submit()
+    {
+        _validation = Core.Security.BotTokenValidator.Validate(_token);
+        if (_validation is not null) return;
+        var token = Core.Security.BotTokenValidator.Normalize(_token);
+        _token = "";
+        await OnSubmit.InvokeAsync(token);
+    }
+}

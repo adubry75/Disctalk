@@ -1,0 +1,118 @@
+@inherits ClientComponentBase
+
+<nav class="dt-channels" aria-label="Channels">
+    <header class="dt-guild-header">
+        @if (Guilds.Count > 1)
+        {
+            <select class="dt-guild-select" aria-label="Server" value="@GuildId" @onchange="OnGuildChanged">
+                @foreach (var g in Guilds)
+                {
+                    <option value="@g.Id">@g.Name</option>
+                }
+            </select>
+        }
+        else
+        {
+            <span class="dt-guild-name">@(Guild?.Name ?? "No server")</span>
+        }
+    </header>
+
+    <div class="dt-channel-scroll">
+        @foreach (var group in Groups)
+        {
+            @if (group.Category is { } category)
+            {
+                var collapsed = _collapsed.Contains(category.Id);
+                <button class="dt-category @(collapsed ? "collapsed" : "")" @onclick="() => Toggle(category.Id)" aria-expanded="@(!collapsed)">
+                    <Icon Name="chevron" Size="12" /><span>@category.Name</span>
+                </button>
+                @if (collapsed)
+                {
+                    @* Collapsed categories still show unread and the selected channel, like Discord. *@
+                    @foreach (var channel in group.Channels.Where(c => c.Id == Ui.ChannelId || (c.IsMessageable && Client.IsUnread(c.Id))))
+                    {
+                        @ChannelRow(channel)
+                    }
+                }
+                else
+                {
+                    @foreach (var channel in group.Channels)
+                    {
+                        @ChannelRow(channel)
+                    }
+                }
+            }
+            else
+            {
+                @foreach (var channel in group.Channels)
+                {
+                    @ChannelRow(channel)
+                }
+            }
+        }
+    </div>
+
+    <footer class="dt-self">
+        @if (Client.CurrentUser is { } me)
+        {
+            <img class="dt-avatar dt-avatar-sm" src="@me.AvatarUrl" alt="" />
+            <div class="dt-self-name">
+                <strong>@me.DisplayName</strong>
+                <small>@StateLabel</small>
+            </div>
+        }
+        <button class="dt-icon-btn" title="Settings" aria-label="Settings" @onclick="Ui.OpenSettings"><Icon Name="settings" /></button>
+    </footer>
+</nav>
+
+@code {
+    readonly HashSet<ulong> _collapsed = new();
+
+    IReadOnlyList<GuildInfo> Guilds => Client.Guilds;
+    ulong? GuildId => Ui.GuildId;
+    GuildInfo? Guild => GuildId is ulong id ? Client.GetGuild(id) : null;
+    IReadOnlyList<ChannelGroup> Groups => GuildId is ulong id ? ChannelTree.Build(Client.GetChannels(id)) : [];
+
+    string StateLabel => Client.State switch
+    {
+        ConnectionState.Connected => "Online as bot",
+        ConnectionState.Reconnecting => "Reconnecting…",
+        ConnectionState.Connecting => "Connecting…",
+        _ => Client.State.ToString(),
+    };
+
+    protected override bool Handles(ClientChange change) =>
+        change.Kind is ChangeKind.Connection or ChangeKind.Guilds or ChangeKind.Channels or ChangeKind.Unread;
+
+    void Toggle(ulong categoryId)
+    {
+        if (!_collapsed.Remove(categoryId)) _collapsed.Add(categoryId);
+    }
+
+    void OnGuildChanged(ChangeEventArgs e)
+    {
+        if (ulong.TryParse(e.Value?.ToString(), out var id)) Ui.SelectGuild(id);
+    }
+
+    void Select(ChannelInfo channel)
+    {
+        if (channel.IsMessageable) Ui.SelectChannel(channel.GuildId, channel.Id);
+    }
+
+    RenderFragment ChannelRow(ChannelInfo channel) => __builder =>
+    {
+        var unread = channel.IsMessageable && Client.IsUnread(channel.Id);
+        var selected = channel.Id == Ui.ChannelId;
+        var icon = channel.Kind switch { ChannelKind.Announcement => "announce", ChannelKind.Voice => "voice", ChannelKind.Forum => "forum", _ => "hash" };
+        <button class="dt-channel @(selected ? "selected" : "") @(unread ? "unread" : "") @(channel.IsMessageable ? "" : "disabled")"
+                disabled="@(!channel.IsMessageable)" title="@channel.Topic" @onclick="() => Select(channel)"
+                aria-current="@(selected ? "page" : null)">
+            @if (unread)
+            {
+                <span class="dt-unread-dot" aria-label="Unread"></span>
+            }
+            <Icon Name="@icon" Size="18" Class="dt-channel-icon" />
+            <span class="dt-channel-name">@channel.Name</span>
+        </button>
+    };
+}

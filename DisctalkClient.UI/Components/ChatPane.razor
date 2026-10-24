@@ -1,0 +1,93 @@
+@inherits ClientComponentBase
+
+<main class="dt-chat" @onclick="() => _selectedId = null">
+    <header class="dt-chat-header">
+        <button class="dt-icon-btn dt-mobile-only" title="Channels" aria-label="Open channels" @onclick="Ui.ToggleChannelDrawer" @onclick:stopPropagation="true"><Icon Name="menu" /></button>
+        @if (Channel is { } channel)
+        {
+            <Icon Name="@(channel.Kind == ChannelKind.Announcement ? "announce" : "hash")" Class="dt-chat-header-icon" />
+            <h1 class="dt-chat-title">@channel.Name</h1>
+            @if (channel.Topic is { } topic)
+            {
+                <span class="dt-chat-topic" title="@topic"><MarkdownText Text="@topic" GuildId="channel.GuildId" Options="MarkdownOptions.InlineOnly" /></span>
+            }
+        }
+        <span class="dt-spacer"></span>
+        <button class="dt-icon-btn dt-desktop-only @(Ui.MemberListVisible ? "active" : "")" title="Member list" aria-label="Toggle member list" @onclick="Ui.ToggleMemberList"><Icon Name="users" /></button>
+        <button class="dt-icon-btn dt-mobile-only" title="Members" aria-label="Open members" @onclick="Ui.ToggleMemberDrawer" @onclick:stopPropagation="true"><Icon Name="users" /></button>
+    </header>
+
+    @if (Channel is { } current)
+    {
+        <MessageList ChannelId="current.Id" SelectedId="_selectedId"
+                     OnSelect="m => _selectedId = m.Id" OnReply="Ui.StartReply" OnEdit="Ui.StartEdit" OnDelete="RequestDelete"
+                     OnPickReaction="m => _reactingTo = m" OnToggleReaction="ToggleReaction" />
+        <TypingIndicator ChannelId="current.Id" />
+        <Composer ChannelId="current.Id" GuildId="current.GuildId" />
+    }
+    else
+    {
+        <div class="dt-empty">
+            <Icon Name="cat" Size="64" />
+            <p>@(Client.Guilds.Count == 0 && Client.State == ConnectionState.Connected
+                ? "The bot isn't in any server yet. Use the invite link from the README."
+                : "Pick a channel to start chatting.")</p>
+        </div>
+    }
+
+    @if (_reactingTo is { } target)
+    {
+        <div class="dt-overlay" @onclick="() => _reactingTo = null" @onclick:stopPropagation="true">
+            <div class="dt-overlay-center">
+                <EmojiPicker GuildId="target.GuildId" OnPick="e => React(target, e)" OnClose="() => _reactingTo = null" />
+            </div>
+        </div>
+    }
+
+    @if (_deleting is { } doomed)
+    {
+        <div class="dt-overlay" @onclick="() => _deleting = null" @onclick:stopPropagation="true">
+            <div class="dt-dialog" role="alertdialog" aria-labelledby="dt-del-title" @onclick:stopPropagation="true">
+                <h2 id="dt-del-title">Delete message</h2>
+                <p>Are you sure you want to delete this message?</p>
+                <blockquote class="dt-dialog-quote">@(doomed.Content.Length > 200 ? doomed.Content[..200] + "…" : doomed.Content)</blockquote>
+                <p class="dt-hint">Tip: hold Shift when clicking delete to skip this.</p>
+                <div class="dt-dialog-actions">
+                    <button class="dt-btn" @onclick="() => _deleting = null">Cancel</button>
+                    <button class="dt-btn danger" @onclick="() => Delete(doomed)">Delete</button>
+                </div>
+            </div>
+        </div>
+    }
+</main>
+
+@code {
+    ulong? _selectedId;
+    ChatMessage? _reactingTo;
+    ChatMessage? _deleting;
+
+    ChannelInfo? Channel => Ui.ChannelId is ulong id ? Client.GetChannel(id) : null;
+
+    protected override bool Handles(ClientChange change) =>
+        change.Kind is ChangeKind.Connection or ChangeKind.Guilds || (change.Kind == ChangeKind.Channels && change.ChannelId == Ui.ChannelId);
+
+    async Task RequestDelete((ChatMessage Message, bool SkipConfirm) request)
+    {
+        if (request.SkipConfirm) await Delete(request.Message);
+        else _deleting = request.Message;
+    }
+
+    async Task Delete(ChatMessage message)
+    {
+        _deleting = null;
+        await Try(() => Client.DeleteAsync(message), "Couldn't delete");
+    }
+
+    async Task React(ChatMessage message, EmojiRef emoji)
+    {
+        _reactingTo = null;
+        await Try(() => Client.ToggleReactionAsync(message, emoji), "Couldn't react");
+    }
+
+    Task ToggleReaction((ChatMessage Message, EmojiRef Emoji) r) => Try(() => Client.ToggleReactionAsync(r.Message, r.Emoji), "Couldn't react");
+}

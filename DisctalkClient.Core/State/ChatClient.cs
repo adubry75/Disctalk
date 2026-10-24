@@ -289,6 +289,7 @@ public sealed class ChatClient : IAsyncDisposable
 
     public async Task SendAsync(OutgoingMessage message, CancellationToken cancellationToken = default)
     {
+        message = message with { Content = ExpandEmoji(message.ChannelId, message.Content) };
         var sent = await Sender.SendAsync(message, cancellationToken).ConfigureAwait(false);
         lock (_lock) _typingSentAt.Remove(message.ChannelId);
         if (sent is not null) Ingest(sent, isEdit: false);
@@ -296,7 +297,7 @@ public sealed class ChatClient : IAsyncDisposable
 
     public async Task EditAsync(ChatMessage message, string newContent, CancellationToken cancellationToken = default)
     {
-        var edited = await Sender.EditAsync(message, newContent, cancellationToken).ConfigureAwait(false);
+        var edited = await Sender.EditAsync(message, ExpandEmoji(message.ChannelId, newContent), cancellationToken).ConfigureAwait(false);
         if (edited is not null) Ingest(edited, isEdit: true);
     }
 
@@ -306,6 +307,9 @@ public sealed class ChatClient : IAsyncDisposable
         lock (_lock) _messages.GetValueOrDefault(message.ChannelId)?.Remove([message.Id]);
         Raise(new ClientChange(ChangeKind.Messages, message.GuildId, message.ChannelId));
     }
+
+    string ExpandEmoji(ulong channelId, string content) =>
+        GetChannel(channelId)?.GuildId is ulong guildId ? EmojiShortcodes.Expand(content, GetEmojis(guildId)) : content;
 
     /// <summary>Adds the bot's reaction, or removes it if the bot already reacted with that emoji.</summary>
     public async Task ToggleReactionAsync(ChatMessage message, EmojiRef emoji, CancellationToken cancellationToken = default)

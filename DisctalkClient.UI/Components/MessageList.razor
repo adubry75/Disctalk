@@ -1,0 +1,127 @@
+@inherits ClientComponentBase
+@implements IAsyncDisposable
+@inject DisctalkJs Js
+
+<div class="dt-scroller" @ref="_scroller">
+    @* column-reverse: the browser anchors to the bottom and keeps the view still when history is prepended. *@
+    <div class="dt-message-list" role="log" aria-live="polite" aria-relevant="additions">
+        <div class="dt-history-sentinel" @ref="_sentinel">
+            @if (Client.IsLoadingHistory(ChannelId))
+            {
+                <div class="dt-loading"><Icon Name="paw" Size="16" Class="dt-spin" /> Loading messages…</div>
+            }
+            else if (!Client.HasMoreHistory(ChannelId))
+            {
+                <div class="dt-channel-start">
+                    <div class="dt-channel-start-icon"><Icon Name="hash" Size="36" /></div>
+                    <h2>Welcome to #@(Client.GetChannel(ChannelId)?.Name)!</h2>
+                    <p>This is the start of the channel.</p>
+                </div>
+            }
+        </div>
+
+        @{
+            ChatMessage? previous = null;
+            var zone = TimeProvider.System.LocalTimeZone;
+        }
+        @foreach (var m in _messages)
+        {
+            @if (MessageGrouping.StartsNewDay(previous, m, zone))
+            {
+                <div class="dt-day-divider" role="separator"><span>@Time.FormatDateDivider(m.Timestamp)</span></div>
+            }
+            <MessageView @key="m.Id" Message="m"
+                         Grouped="MessageGrouping.ContinuesGroup(previous, m) && !MessageGrouping.StartsNewDay(previous, m, zone)"
+                         Compact="S.CompactMode" Selected="m.Id == SelectedId" CanEdit="Client.CanEdit(m)" Version="_version"
+                         OnSelect="Select" OnReply="OnReply" OnEdit="OnEdit" OnDelete="OnDelete"
+                         OnPickReaction="OnPickReaction" OnToggleReaction="OnToggleReaction" />
+            previous = m;
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ulong ChannelId { get; set; }
+    [Parameter] public ulong? SelectedId { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnSelect { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnReply { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnEdit { get; set; }
+    [Parameter] public EventCallback<(ChatMessage Message, bool SkipConfirm)> OnDelete { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnPickReaction { get; set; }
+    [Parameter] public EventCallback<(ChatMessage Message, EmojiRef Emoji)> OnToggleReaction { get; set; }
+
+    ElementReference _scroller, _sentinel;
+    IReadOnlyList<ChatMessage> _messages = [];
+    DotNetObjectReference<MessageList>? _self;
+    IJSObjectReference? _observer;
+    ulong _loadedChannel;
+    int _version;
+    ClientSettings? _lastSettings;
+
+    protected override bool Handles(ClientChange change) => change.Kind switch
+    {
+        ChangeKind.Messages => change.ChannelId == ChannelId,
+        ChangeKind.Members or ChangeKind.Roles => change.GuildId == Ui.GuildId && Bump(),
+        ChangeKind.Connection => true,
+        _ => false,
+    };
+
+    bool Bump()
+    {
+        Interlocked.Increment(ref _version);
+        return true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _messages = Client.GetMessages(ChannelId);
+        if (_loadedChannel != ChannelId)
+        {
+            _loadedChannel = ChannelId;
+            if (_observer is not null) await Js.ScrollToBottomAsync(_scroller);
+            await Try(() => Client.EnsureHistoryAsync(ChannelId), "Couldn't load messages");
+        }
+    }
+
+    protected override bool ShouldRender()
+    {
+        _messages = Client.GetMessages(ChannelId);
+        if (!ReferenceEquals(_lastSettings, S))
+        {
+            _lastSettings = S;
+            _version++;
+        }
+        return true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _self = DotNetObjectReference.Create(this);
+        try { _observer = await Js.ObserveTopAsync(_scroller, _sentinel, _self); }
+        catch (JSException) { /* prerendering or no JS (tests) */ }
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>Called by the IntersectionObserver when the top of the list scrolls into view.</summary>
+    [JSInvokable]
+    public async Task OnReachedTop()
+    {
+        if (!Client.IsHistoryLoaded(ChannelId) || !Client.HasMoreHistory(ChannelId)) return;
+        await Try(() => Client.LoadOlderAsync(ChannelId), "Couldn't load older messages");
+    }
+
+    Task Select(ChatMessage m) => OnSelect.InvokeAsync(m);
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        if (_observer is not null)
+        {
+            try { await _observer.InvokeVoidAsync("dispose"); await _observer.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+        }
+        _self?.Dispose();
+    }
+}

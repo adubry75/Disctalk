@@ -1,0 +1,243 @@
+@inherits ClientComponentBase
+@implements IAsyncDisposable
+@inject DisctalkJs Js
+
+<div class="dt-composer-wrap">
+    @if (Ui.ReplyingTo is { } reply)
+    {
+        <div class="dt-composer-banner">
+            <span>Replying to <strong>@(reply.GuildId is ulong g && !reply.Author.IsWebhook ? Client.GetMember(g, reply.Author.Id)?.DisplayName ?? reply.Author.DisplayName : reply.Author.DisplayName)</strong></span>
+            <button class="dt-link-btn @(S.PingOnReply ? "on" : "")" title="Mention the author when replying" @onclick="TogglePing">@(S.PingOnReply ? "@ ON" : "@ OFF")</button>
+            <button class="dt-icon-btn" title="Cancel reply" @onclick="Ui.CancelComposerMode"><Icon Name="x" Size="16" /></button>
+        </div>
+    }
+    else if (Ui.Editing is not null)
+    {
+        <div class="dt-composer-banner editing">
+            <span>Editing message — <kbd>Esc</kbd> to cancel, <kbd>Enter</kbd> to save</span>
+            <button class="dt-icon-btn" title="Cancel edit" @onclick="CancelEdit"><Icon Name="x" Size="16" /></button>
+        </div>
+    }
+
+    @if (_files.Count > 0)
+    {
+        <div class="dt-composer-files">
+            @foreach (var f in _files)
+            {
+                <span class="dt-file-chip">
+                    <Icon Name="file" Size="14" /> @f.FileName <small>@AttachmentView.FormatSize(f.Content.Length)</small>
+                    <button class="dt-icon-btn" title="Remove" @onclick="() => _files.Remove(f)"><Icon Name="x" Size="12" /></button>
+                </span>
+            }
+        </div>
+    }
+
+    <div class="dt-composer">
+        <label class="dt-icon-btn dt-attach" title="Attach files">
+            <Icon Name="plus" />
+            <InputFile OnChange="OnFilesSelected" multiple class="dt-visually-hidden" disabled="@(Ui.Editing is not null)" />
+        </label>
+
+        <textarea @ref="_textarea" rows="1" placeholder="@Placeholder" aria-label="Message" maxlength="4000"
+                  @oninput="OnInput" disabled="@(Client.State != ConnectionState.Connected)"></textarea>
+
+        <button class="dt-icon-btn" title="Emoji" aria-label="Emoji" @onclick="() => _pickerOpen = !_pickerOpen"><Icon Name="smile" /></button>
+
+        <button class="dt-send-mode @(S.SendMode == SendMode.Webhook ? "webhook" : "bot")" @onclick="ToggleSendMode"
+                title="@(S.SendMode == SendMode.Webhook ? "Sending through the channel webhook. Click to send as the bot." : "Sending as the bot. Click to send through the webhook.")">
+            @if (S.SendMode == SendMode.Webhook)
+            {
+                @if (!string.IsNullOrEmpty(S.WebhookAvatarUrl))
+                {
+                    <img class="dt-avatar dt-avatar-xs" src="@S.WebhookAvatarUrl" alt="" />
+                }
+                else
+                {
+                    <Icon Name="webhook" Size="16" />
+                }
+                <span>@(string.IsNullOrWhiteSpace(S.WebhookDisplayName) ? "Webhook" : S.WebhookDisplayName)</span>
+            }
+            else
+            {
+                <Icon Name="bot" Size="16" /><span>Bot</span>
+            }
+        </button>
+
+        <button class="dt-icon-btn dt-send" title="Send" aria-label="Send" @onclick="SendClicked" disabled="@(!CanSend)"><Icon Name="send" /></button>
+
+        @if (_pickerOpen)
+        {
+            <div class="dt-composer-picker">
+                <EmojiPicker GuildId="GuildId" OnPick="InsertEmoji" OnClose="() => _pickerOpen = false" />
+            </div>
+        }
+    </div>
+    @if (_text.Length > MessageSender.MaxContentLength - 200)
+    {
+        <div class="dt-char-count @(_text.Length > MessageSender.MaxContentLength ? "over" : "")">@(MessageSender.MaxContentLength - _text.Length)</div>
+    }
+</div>
+
+@code {
+    const long MaxFileBytes = 25 * 1024 * 1024;
+
+    [Parameter, EditorRequired] public ulong ChannelId { get; set; }
+    [Parameter] public ulong? GuildId { get; set; }
+
+    ElementReference _textarea;
+    DotNetObjectReference<Composer>? _self;
+    IJSObjectReference? _jsHandle;
+    readonly List<OutgoingFile> _files = new();
+    string _text = "";
+    bool _sending, _pickerOpen;
+    ChatMessage? _editingShown;
+
+    string Placeholder => Ui.Editing is not null ? "Edit message"
+        : $"Message #{Client.GetChannel(ChannelId)?.Name}" + (S.SendMode == SendMode.Webhook ? " via webhook" : "");
+
+    bool CanSend => !_sending && Client.State == ConnectionState.Connected && (_text.Trim().Length > 0 || _files.Count > 0);
+
+    protected override bool Handles(ClientChange change) => change.Kind is ChangeKind.Connection or ChangeKind.Channels;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            try { _jsHandle = await Js.AttachComposerAsync(_textarea, _self); }
+            catch (JSException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        // Entering edit mode loads the message text into the composer.
+        if (!ReferenceEquals(Ui.Editing, _editingShown))
+        {
+            _editingShown = Ui.Editing;
+            if (Ui.Editing is { } editing) await SetText(editing.Content);
+        }
+    }
+
+    async Task SetText(string text)
+    {
+        _text = text;
+        try { await Js.SetComposerTextAsync(_textarea, text); } catch (JSException) { } catch (InvalidOperationException) { }
+    }
+
+    async Task OnInput(ChangeEventArgs e)
+    {
+        _text = e.Value?.ToString() ?? "";
+        if (_text.Length > 0 && Ui.Editing is null) await Client.NotifyTypingAsync(ChannelId);
+    }
+
+    [JSInvokable]
+    public async Task SubmitFromJs(string text)
+    {
+        _text = text;
+        await SendAsync();
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task EditLastFromJs()
+    {
+        var mine = Client.GetMessages(ChannelId).LastOrDefault(Client.CanEdit);
+        if (mine is not null) Ui.StartEdit(mine);
+        await Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public async Task CancelFromJs()
+    {
+        if (Ui.Editing is not null) await CancelEdit();
+        else Ui.CancelComposerMode();
+        _pickerOpen = false;
+        StateHasChanged();
+    }
+
+    async Task CancelEdit()
+    {
+        Ui.CancelComposerMode();
+        await SetText("");
+    }
+
+    Task SendClicked() => SendAsync();
+
+    /// <summary>Sends (or saves an edit). Public so tests can drive it without JS.</summary>
+    public async Task SendAsync()
+    {
+        if (!CanSend) return;
+        _sending = true;
+        var text = _text;
+        try
+        {
+            if (Ui.Editing is { } editing)
+            {
+                await Client.EditAsync(editing, text);
+                Ui.CancelComposerMode();
+            }
+            else
+            {
+                await Client.SendAsync(new OutgoingMessage
+                {
+                    ChannelId = ChannelId,
+                    Content = text,
+                    ReplyTo = Ui.ReplyingTo,
+                    Files = _files.ToList(),
+                });
+                _files.Clear();
+                Ui.CancelComposerMode();
+            }
+            await SetText("");
+        }
+        catch (Exception ex)
+        {
+            Ui.ShowToast((Ui.Editing is null ? "Couldn't send: " : "Couldn't edit: ") + Core.Security.SecretRedactor.Redact(ex.Message));
+        }
+        finally
+        {
+            _sending = false;
+        }
+    }
+
+    async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(MessageSender.MaxFiles))
+        {
+            if (_files.Count >= MessageSender.MaxFiles) break;
+            if (file.Size > MaxFileBytes)
+            {
+                Ui.ShowToast($"{file.Name} is larger than 25 MB.");
+                continue;
+            }
+            using var stream = file.OpenReadStream(MaxFileBytes);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            _files.Add(new OutgoingFile(file.Name, buffer.ToArray(), file.ContentType));
+        }
+    }
+
+    async Task InsertEmoji(EmojiRef emoji)
+    {
+        _pickerOpen = false;
+        var text = emoji.Id is ulong id ? $"<{(emoji.Animated ? "a" : "")}:{emoji.Name}:{id}>" : emoji.Name;
+        try { _text = await Js.InsertAtCursorAsync(_textarea, text); }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException) { _text += text; }
+    }
+
+    Task ToggleSendMode() =>
+        Settings.UpdateAsync(s => s with { SendMode = s.SendMode == SendMode.Bot ? SendMode.Webhook : SendMode.Bot });
+
+    Task TogglePing() => Settings.UpdateAsync(s => s with { PingOnReply = !s.PingOnReply });
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        if (_jsHandle is not null)
+        {
+            try { await _jsHandle.InvokeVoidAsync("dispose"); await _jsHandle.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+        }
+        _self?.Dispose();
+    }
+}

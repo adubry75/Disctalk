@@ -1,0 +1,35 @@
+@inherits ClientComponentBase
+
+<div class="dt-typing" aria-live="polite">
+    @if (_names.Count > 0)
+    {
+        <span class="dt-typing-paws" aria-hidden="true"><Icon Name="paw" Size="12" /><Icon Name="paw" Size="12" /><Icon Name="paw" Size="12" /></span>
+        <span>@TypingTracker.Describe(_names)</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ulong ChannelId { get; set; }
+
+    IReadOnlyList<string> _names = [];
+    Timer? _timer;
+
+    protected override bool Handles(ClientChange change) => change.Kind == ChangeKind.Typing && change.ChannelId == ChannelId;
+
+    protected override bool ShouldRender()
+    {
+        _names = Client.GetTypingNames(ChannelId);
+        // Entries expire on their own; poll once a second while someone is typing.
+        if (_names.Count > 0) _timer ??= new Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+        else { _timer?.Dispose(); _timer = null; }
+        return true;
+    }
+
+    protected override void OnParametersSet() => _names = Client.GetTypingNames(ChannelId);
+
+    public override void Dispose()
+    {
+        _timer?.Dispose();
+        base.Dispose();
+    }
+}

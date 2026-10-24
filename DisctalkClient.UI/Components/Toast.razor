@@ -1,0 +1,39 @@
+@implements IDisposable
+@inject UiState Ui
+
+@if (Ui.Toast is { } message)
+{
+    <div class="dt-toast" role="alert">
+        <span>@message</span>
+        <button class="dt-icon-btn" title="Dismiss" @onclick="() => Ui.ShowToast(null)"><Icon Name="x" Size="16" /></button>
+    </div>
+}
+
+@code {
+    CancellationTokenSource? _hide;
+    string? _shown;
+
+    protected override void OnInitialized() => Ui.Changed += OnChanged;
+
+    void OnChanged()
+    {
+        if (Ui.Toast == _shown) return;
+        _shown = Ui.Toast;
+        _hide?.Cancel();
+        if (_shown is not null)
+        {
+            var cts = _hide = new CancellationTokenSource();
+            _ = Task.Delay(TimeSpan.FromSeconds(6), cts.Token).ContinueWith(t =>
+            {
+                if (!t.IsCanceled) _ = InvokeAsync(() => Ui.ShowToast(null));
+            }, TaskScheduler.Default);
+        }
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Ui.Changed -= OnChanged;
+        _hide?.Cancel();
+    }
+}

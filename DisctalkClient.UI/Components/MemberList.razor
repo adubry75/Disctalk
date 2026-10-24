@@ -1,0 +1,55 @@
+@inherits ClientComponentBase
+
+<aside class="dt-members" aria-label="Members">
+    <header class="dt-members-header">Members — @_count</header>
+    <div class="dt-member-scroll">
+        @foreach (var group in _groups)
+        {
+            <h3 class="dt-member-group">@group.Title — @group.Members.Count</h3>
+            @foreach (var m in group.Members)
+            {
+                <div class="dt-member" title="@m.Username">
+                    <img class="dt-avatar dt-avatar-sm" src="@m.AvatarUrl" alt="" loading="lazy" />
+                    <span class="dt-member-name" style="@(NameStyle(m))">@m.DisplayName</span>
+                    @if (m.IsBot)
+                    {
+                        <span class="dt-tag">BOT</span>
+                    }
+                </div>
+            }
+        }
+    </div>
+</aside>
+
+@code {
+    IReadOnlyList<MemberGroup> _groups = [];
+    IReadOnlyDictionary<ulong, RoleInfo> _roles = new Dictionary<ulong, RoleInfo>();
+    int _count;
+
+    protected override bool Handles(ClientChange change) =>
+        change.Kind is ChangeKind.Members or ChangeKind.Roles or ChangeKind.Guilds && change.GuildId == Ui.GuildId;
+
+    protected override void OnParametersSet() => Refresh();
+
+    protected override bool ShouldRender()
+    {
+        Refresh();
+        return true;
+    }
+
+    void Refresh()
+    {
+        if (Ui.GuildId is not ulong guildId)
+        {
+            _groups = [];
+            _count = 0;
+            return;
+        }
+        var members = Client.GetMembers(guildId);
+        _roles = Client.GetRoles(guildId);
+        _groups = MemberGrouping.Group(members, _roles);
+        _count = members.Count;
+    }
+
+    string? NameStyle(MemberInfo m) => MemberGrouping.NameColor(m, _roles) is { } color ? $"color:{color}" : null;
+}

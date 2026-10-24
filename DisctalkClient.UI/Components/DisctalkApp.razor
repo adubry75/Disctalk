@@ -1,0 +1,152 @@
+@inherits ClientComponentBase
+@implements IAsyncDisposable
+@inject ITokenStore Tokens
+@inject DisctalkJs Js
+
+@* The whole client. Hosts (MAUI, dev web host) render just this component. *@
+<div class="dt-app theme-@S.Theme.ToString().ToLowerInvariant() @(Ui.MemberListVisible ? "" : "members-hidden") @(Ui.ChannelDrawerOpen ? "left-open" : "") @(Ui.MemberDrawerOpen ? "right-open" : "")"
+     style="--accent:@ClientSettings.AccentHex(S.Accent)">
+    @if (!_initialized)
+    {
+        <div class="dt-splash"><Icon Name="cat" Size="72" Class="dt-bob" /><p>Waking up the cat…</p></div>
+    }
+    else if (ShowSetup)
+    {
+        <TokenSetup Error="@SetupError" Busy="_connecting" OnSubmit="ConnectWithNewToken" />
+    }
+    else
+    {
+        @if (Client.State is ConnectionState.Reconnecting or ConnectionState.Connecting or ConnectionState.Failed)
+        {
+            <div class="dt-banner @(Client.State == ConnectionState.Failed ? "error" : "")" role="status">
+                <span>@(Client.StatusDetail ?? Client.State.ToString())</span>
+                @if (Client.State == ConnectionState.Failed)
+                {
+                    <button class="dt-link-btn" @onclick="Reconnect">Retry</button>
+                    <button class="dt-link-btn" @onclick="ForgetToken">Change token</button>
+                }
+            </div>
+        }
+        <div class="dt-layout">
+            <ChannelList />
+            <ChatPane />
+            <MemberList />
+            <div class="dt-backdrop" @onclick="Ui.CloseDrawers" aria-hidden="true"></div>
+        </div>
+        @if (Ui.SettingsOpen)
+        {
+            <SettingsPage OnSignOut="ForgetToken" />
+        }
+    }
+    <Lightbox />
+    <Toast />
+</div>
+
+@code {
+    bool _initialized, _connecting, _needsToken;
+    string? _connectError;
+    ulong? _activeChannel;
+    DotNetObjectReference<DisctalkApp>? _self;
+
+    bool ShowSetup => _needsToken || (Client.State == ConnectionState.Failed && Client.Guilds.Count == 0 && !_connecting);
+    string? SetupError => _connectError ?? (Client.State == ConnectionState.Failed ? Client.StatusDetail : null);
+
+    protected override bool Handles(ClientChange change) => change.Kind is ChangeKind.Connection or ChangeKind.Guilds or ChangeKind.Channels;
+
+    protected override async Task OnInitializedAsync()
+    {
+        base.OnInitialized();
+        await Settings.LoadAsync();
+        var token = await Tokens.GetTokenAsync();
+        _needsToken = string.IsNullOrWhiteSpace(token);
+        _initialized = true;
+        if (!_needsToken) await ConnectAsync(token!, save: false);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            try { await Js.InstallDelegationAsync(_self); }
+            catch (JSException) { }
+            catch (InvalidOperationException) { }
+        }
+        EnsureSelection();
+        if (_activeChannel != Ui.ChannelId)
+        {
+            _activeChannel = Ui.ChannelId;
+            Client.SetActiveChannel(Ui.ChannelId);
+        }
+    }
+
+    /// <summary>Opens the last-used channel (or the first text channel) once guilds arrive.</summary>
+    void EnsureSelection()
+    {
+        if (Ui.ChannelId is ulong current && Client.GetChannel(current) is not null) return;
+        var guilds = Client.Guilds;
+        if (guilds.Count == 0) return;
+
+        var guild = guilds.FirstOrDefault(g => g.Id == Ui.GuildId) ?? guilds.FirstOrDefault(g => g.Id == S.LastGuildId) ?? guilds[0];
+        var channels = Client.GetChannels(guild.Id);
+        var channel = channels.FirstOrDefault(c => c.Id == S.LastChannelId && c.IsMessageable)
+            ?? ChannelTree.Build(channels).SelectMany(g => g.Channels).FirstOrDefault(c => c.IsMessageable);
+        if (channel is not null) Ui.SelectChannel(guild.Id, channel.Id);
+        else Ui.SelectGuild(guild.Id);
+    }
+
+    [JSInvokable]
+    public Task OnChannelMentionClicked(string channelId)
+    {
+        if (ulong.TryParse(channelId, out var id) && Client.GetChannel(id) is { IsMessageable: true } channel)
+            Ui.SelectChannel(channel.GuildId, channel.Id);
+        return Task.CompletedTask;
+    }
+
+    async Task ConnectWithNewToken(string token) => await ConnectAsync(token, save: true);
+
+    async Task ConnectAsync(string token, bool save)
+    {
+        _connecting = true;
+        _connectError = null;
+        StateHasChanged();
+        try
+        {
+            await Client.ConnectAsync(token);
+            if (save) await Tokens.SaveTokenAsync(token);
+            _needsToken = false;
+        }
+        catch (Exception ex)
+        {
+            _connectError = Core.Security.SecretRedactor.Redact(ex.Message);
+            _needsToken = true;
+        }
+        finally
+        {
+            _connecting = false;
+        }
+    }
+
+    async Task Reconnect()
+    {
+        var token = await Tokens.GetTokenAsync();
+        if (string.IsNullOrWhiteSpace(token)) _needsToken = true;
+        else await ConnectAsync(token, save: false);
+    }
+
+    async Task ForgetToken()
+    {
+        Ui.CloseSettings();
+        await Client.DisconnectAsync();
+        await Tokens.ClearTokenAsync();
+        _connectError = null;
+        _needsToken = true;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        _self?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

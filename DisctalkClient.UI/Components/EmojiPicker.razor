@@ -1,0 +1,45 @@
+@inject ChatClient Client
+
+<div class="dt-emoji-picker" role="dialog" aria-label="Emoji picker" @onclick:stopPropagation="true">
+    <div class="dt-emoji-search">
+        <input type="search" placeholder="Find the purrfect emoji" @bind="_query" @bind:event="oninput" aria-label="Search emoji" />
+        <button class="dt-icon-btn" title="Close" @onclick="OnClose"><Icon Name="x" Size="16" /></button>
+    </div>
+    <div class="dt-emoji-grid-scroll">
+        @if (CustomEmoji.Count > 0)
+        {
+            <h4>Server</h4>
+            <div class="dt-emoji-grid">
+                @foreach (var e in CustomEmoji)
+                {
+                    <button title=":@(e.Name):" @onclick="() => OnPick.InvokeAsync(e.ToRef())"><img src="@e.ToRef().ImageUrl(48)" alt=":@(e.Name):" loading="lazy" /></button>
+                }
+            </div>
+        }
+        @foreach (var group in Unicode)
+        {
+            <h4>@group.Key</h4>
+            <div class="dt-emoji-grid">
+                @foreach (var e in group)
+                {
+                    <button title=":@(e.Name):" @onclick="() => OnPick.InvokeAsync(new EmojiRef(null, e.Value))">@e.Value</button>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    string _query = "";
+
+    [Parameter] public ulong? GuildId { get; set; }
+    [Parameter] public EventCallback<EmojiRef> OnPick { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    bool Matches(string name) => _query.Length == 0 || name.Contains(_query.Trim(':', ' '), StringComparison.OrdinalIgnoreCase);
+
+    IReadOnlyList<GuildEmojiInfo> CustomEmoji => GuildId is ulong g ? Client.GetEmojis(g).Where(e => Matches(e.Name)).ToList() : [];
+
+    IEnumerable<IGrouping<string, UnicodeEmoji>> Unicode =>
+        EmojiShortcodes.Common.Where(e => Matches(e.Name)).DistinctBy(e => e.Value).GroupBy(e => e.Category);
+}

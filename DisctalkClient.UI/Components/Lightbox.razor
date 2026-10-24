@@ -1,0 +1,13 @@
+@inherits ClientComponentBase
+
+@if (Ui.LightboxUrl is { } url)
+{
+    <div class="dt-overlay dt-lightbox" @onclick="Ui.CloseImage" role="dialog" aria-label="Image viewer">
+        <img src="@url" alt="" @onclick:stopPropagation="true" />
+        <a class="dt-lightbox-open" href="@url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">Open original</a>
+    </div>
+}
+
+@code {
+    protected override bool Handles(ClientChange change) => false;
+}

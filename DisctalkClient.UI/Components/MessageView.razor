@@ -1,0 +1,154 @@
+@inject ChatClient Client
+@inject TimestampFormatter Time
+
+@if (Message.Kind == ChatMessageKind.System)
+{
+    <div class="dt-message dt-system" id="msg-@Message.Id">
+        <span class="dt-gutter"><Icon Name="paw" Size="14" /></span>
+        <span class="dt-system-text">@Message.SystemText</span>
+        <time class="dt-time-inline" title="@Time.FormatFull(Message.Timestamp)">@Time.FormatMessageTimestamp(Message.Timestamp)</time>
+    </div>
+}
+else
+{
+    <div class="dt-message @(Grouped && !Compact ? "grouped" : "") @(Compact ? "compact" : "") @(MentionsMe ? "mentioned" : "") @(Selected ? "selected" : "")"
+         id="msg-@Message.Id" @onclick="() => OnSelect.InvokeAsync(Message)">
+
+        @if (Message.ReplyToId is not null && !Compact)
+        {
+            <div class="dt-reply-preview">
+                @if (Message.ReplyTo is { } parent)
+                {
+                    <img class="dt-avatar dt-avatar-xs" src="@parent.Author.AvatarUrl" alt="" />
+                    <span class="dt-reply-author" style="@ColorStyle(parent.Author)">@NameOf(parent.Author)</span>
+                    <span class="dt-reply-content">@(Snippet(parent))</span>
+                }
+                else
+                {
+                    <span class="dt-reply-missing">Original message was deleted</span>
+                }
+            </div>
+        }
+
+        @if (Compact)
+        {
+            <div class="dt-compact-line">
+                <time class="dt-time-compact" title="@Time.FormatFull(Message.Timestamp)">@Time.FormatTime(Message.Timestamp)</time>
+                @if (Message.ReplyTo is { } parent)
+                {
+                    <span class="dt-compact-reply">↪ @NameOf(parent.Author)</span>
+                }
+                <span class="dt-author" style="@ColorStyle(Message.Author)">@NameOf(Message.Author)</span>@AuthorTag()
+                <div class="dt-compact-body">@Body()</div>
+            </div>
+        }
+        else if (Grouped)
+        {
+            <time class="dt-gutter dt-time-hover" title="@Time.FormatFull(Message.Timestamp)">@Time.FormatTime(Message.Timestamp)</time>
+            <div class="dt-message-main">@Body()</div>
+        }
+        else
+        {
+            <img class="dt-avatar dt-gutter" src="@Message.Author.AvatarUrl" alt="" loading="lazy" />
+            <div class="dt-message-main">
+                <header class="dt-message-header">
+                    <span class="dt-author" style="@ColorStyle(Message.Author)">@NameOf(Message.Author)</span>@AuthorTag()
+                    <time class="dt-time" title="@Time.FormatFull(Message.Timestamp)">@Time.FormatMessageTimestamp(Message.Timestamp)</time>
+                </header>
+                @Body()
+            </div>
+        }
+
+        <div class="dt-message-actions" role="toolbar" aria-label="Message actions" @onclick:stopPropagation="true">
+            <button class="dt-icon-btn" title="Add reaction" aria-label="Add reaction" @onclick="() => OnPickReaction.InvokeAsync(Message)"><Icon Name="smile" Size="18" /></button>
+            <button class="dt-icon-btn" title="Reply" aria-label="Reply" @onclick="() => OnReply.InvokeAsync(Message)"><Icon Name="reply" Size="18" /></button>
+            @if (CanEdit)
+            {
+                <button class="dt-icon-btn" title="Edit" aria-label="Edit" @onclick="() => OnEdit.InvokeAsync(Message)"><Icon Name="edit" Size="18" /></button>
+            }
+            <button class="dt-icon-btn danger" title="Delete (Shift+click skips confirmation)" aria-label="Delete" @onclick="e => OnDelete.InvokeAsync((Message, e.ShiftKey))"><Icon Name="trash" Size="18" /></button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public ChatMessage Message { get; set; } = default!;
+    [Parameter] public bool Grouped { get; set; }
+    [Parameter] public bool Compact { get; set; }
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public bool CanEdit { get; set; }
+    /// <summary>Bumped by the list when anything the message depends on (members, roles, settings) changes.</summary>
+    [Parameter] public int Version { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnSelect { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnReply { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnEdit { get; set; }
+    [Parameter] public EventCallback<(ChatMessage Message, bool SkipConfirm)> OnDelete { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnPickReaction { get; set; }
+    [Parameter] public EventCallback<(ChatMessage Message, EmojiRef Emoji)> OnToggleReaction { get; set; }
+
+    object? _lastKey;
+
+    // Messages are immutable records, so reference equality tells us when one changed. Skipping unchanged rows keeps
+    // long channels cheap: markdown is only re-rendered for messages that actually changed.
+    protected override bool ShouldRender()
+    {
+        var key = (Message, Grouped, Compact, Selected, CanEdit, Version);
+        if (Equals(key, _lastKey)) return false;
+        _lastKey = key;
+        return true;
+    }
+
+    ulong? GuildId => Message.GuildId;
+
+    bool MentionsMe => Client.CurrentUser is { } me &&
+        (Message.MentionsEveryone || Message.MentionedUserIds.Contains(me.Id) ||
+         (GuildId is ulong g && Client.GetMember(g, me.Id) is { } self && Message.MentionedRoleIds.Any(self.RoleIds.Contains)));
+
+    string NameOf(AuthorInfo author) =>
+        !author.IsWebhook && GuildId is ulong g && Client.GetMember(g, author.Id) is { } m ? m.DisplayName : author.DisplayName;
+
+    string? ColorStyle(AuthorInfo author) =>
+        !author.IsWebhook && GuildId is ulong g && Client.GetNameColor(g, author.Id) is { } c ? $"color:{c}" : null;
+
+    static string Snippet(ChatMessage m)
+    {
+        var text = m.Content.ReplaceLineEndings(" ");
+        if (text.Length == 0) return m.Attachments.Count > 0 ? "Click to see attachment" : m.Embeds.Count > 0 ? "Embed" : "";
+        return text.Length > 120 ? text[..120] + "…" : text;
+    }
+
+    RenderFragment AuthorTag() => __builder =>
+    {
+        if (Message.Author.IsBot || Message.Author.IsWebhook)
+        {
+            <span class="dt-tag" title="@(Message.Author.IsWebhook ? "Sent through a webhook" : "Bot")">APP</span>
+        }
+    };
+
+    RenderFragment Body() => __builder =>
+    {
+        <MarkdownText Text="@Message.Content" GuildId="GuildId" Class="dt-content" />
+        @if (Message.IsEdited)
+        {
+            <span class="dt-edited" title="@Time.FormatFull(Message.EditedAt!.Value)">(edited)</span>
+        }
+        @if (Message.Attachments.Count > 0)
+        {
+            <div class="dt-attachments">
+                @foreach (var a in Message.Attachments)
+                {
+                    <AttachmentView @key="a.Id" Attachment="a" />
+                }
+            </div>
+        }
+        @foreach (var s in Message.Stickers)
+        {
+            <img class="dt-sticker" src="@s.ImageUrl" alt="@s.Name" title="@s.Name" loading="lazy" />
+        }
+        @foreach (var e in Message.Embeds)
+        {
+            <EmbedView Embed="e" GuildId="GuildId" />
+        }
+        <ReactionBar Reactions="Message.Reactions" OnToggle="emoji => OnToggleReaction.InvokeAsync((Message, emoji))" />
+    };
+}

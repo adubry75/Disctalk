@@ -1,0 +1,100 @@
+@inject UiState Ui
+
+@if (Embed.IsMediaOnly && (Embed.ThumbnailUrl ?? Embed.ImageUrl) is { } media)
+{
+    @if (Embed.VideoUrl is { } video && Embed.Type == "gifv")
+    {
+        <video class="dt-media" src="@video" autoplay loop muted playsinline></video>
+    }
+    else
+    {
+        <img class="dt-media" src="@media" alt="" loading="lazy" @onclick="() => Ui.ShowImage(Embed.ImageUrl ?? media)" />
+    }
+}
+else
+{
+    <article class="dt-embed" style="@(Embed.Color is int c && c != 0 ? $"border-left-color:#{c:x6}" : null)">
+        <div class="dt-embed-body">
+            @if (Embed.ProviderName is { } provider)
+            {
+                <div class="dt-embed-provider">@provider</div>
+            }
+            @if (Embed.AuthorName is { } author)
+            {
+                <div class="dt-embed-author">
+                    @if (Embed.AuthorIconUrl is { } icon)
+                    {
+                        <img src="@icon" alt="" loading="lazy" />
+                    }
+                    @if (SafeUrl(Embed.AuthorUrl) is { } authorUrl)
+                    {
+                        <a href="@authorUrl" target="_blank" rel="noopener noreferrer">@author</a>
+                    }
+                    else
+                    {
+                        <span>@author</span>
+                    }
+                </div>
+            }
+            @if (Embed.Title is { } title)
+            {
+                <div class="dt-embed-title">
+                    @if (SafeUrl(Embed.Url) is { } url)
+                    {
+                        <a href="@url" target="_blank" rel="noopener noreferrer"><MarkdownText Text="@title" GuildId="GuildId" Options="MarkdownOptions.InlineOnly" /></a>
+                    }
+                    else
+                    {
+                        <MarkdownText Text="@title" GuildId="GuildId" Options="MarkdownOptions.InlineOnly" />
+                    }
+                </div>
+            }
+            <MarkdownText Text="@Embed.Description" GuildId="GuildId" Class="dt-embed-description" Options="NoJumbo" />
+            @if (Embed.Fields.Count > 0)
+            {
+                <div class="dt-embed-fields">
+                    @foreach (var f in Embed.Fields)
+                    {
+                        <div class="dt-embed-field @(f.Inline ? "inline" : "")">
+                            <div class="dt-embed-field-name"><MarkdownText Text="@f.Name" GuildId="GuildId" Options="MarkdownOptions.InlineOnly" /></div>
+                            <MarkdownText Text="@f.Value" GuildId="GuildId" Class="dt-embed-field-value" Options="NoJumbo" />
+                        </div>
+                    }
+                </div>
+            }
+            @if (Embed.ImageUrl is { } image)
+            {
+                <img class="dt-embed-image" src="@image" alt="" loading="lazy" @onclick="() => Ui.ShowImage(image)" />
+            }
+            else if (Embed.VideoUrl is { } video && Embed.Type == "video" && Embed.ThumbnailUrl is { } poster)
+            {
+                <a href="@SafeUrl(Embed.Url)" target="_blank" rel="noopener noreferrer"><img class="dt-embed-image" src="@poster" alt="Video" loading="lazy" /></a>
+            }
+            @if (Embed.FooterText is not null || Embed.Timestamp is not null)
+            {
+                <footer class="dt-embed-footer">
+                    @if (Embed.FooterIconUrl is { } footerIcon)
+                    {
+                        <img src="@footerIcon" alt="" loading="lazy" />
+                    }
+                    <span>@Embed.FooterText@(Embed.FooterText is not null && Embed.Timestamp is not null ? " • " : "")@(Embed.Timestamp is { } ts ? Time.FormatMessageTimestamp(ts) : "")</span>
+                </footer>
+            }
+        </div>
+        @if (Embed.ThumbnailUrl is { } thumb && Embed.Type is not "video")
+        {
+            <img class="dt-embed-thumb" src="@thumb" alt="" loading="lazy" @onclick="() => Ui.ShowImage(thumb)" />
+        }
+    </article>
+}
+
+@code {
+    static readonly MarkdownOptions NoJumbo = new() { AllowJumboEmoji = false };
+
+    [Parameter, EditorRequired] public EmbedInfo Embed { get; set; } = default!;
+    [Parameter] public ulong? GuildId { get; set; }
+    [Inject] TimestampFormatter Time { get; set; } = default!;
+
+    static string? SafeUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp) ? url : null;
+}
