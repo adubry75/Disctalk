@@ -1,0 +1,1 @@
+(this.webpackChunkdiscord_app=this.webpackChunkdiscord_app||[]).push([[1234],{56789:function(e,t,n){"use strict";n.d(t,{Z:()=>r});let r={release:"discord_web-7c5e1a2b",environment:"stable",buildNumber:"651234",versionHash:"7c5e1a2b"}}}]);

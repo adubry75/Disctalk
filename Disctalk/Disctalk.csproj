@@ -20,9 +20,4 @@
     <ProjectReference Include="..\Disctalk.Core\Disctalk.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Optional: your captured browser header profile. Git-ignored; copied next to the exe if present. -->
-    <None Include="..\headerprofile.json" Link="headerprofile.json" Condition="Exists('..\headerprofile.json')" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
 </Project>

@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using Disctalk.Core.Http;
 using Disctalk.Models;
 
 namespace Disctalk
@@ -22,27 +23,23 @@ namespace Disctalk
         public bool TooManyRequests { get; private set; }
         public bool KillSwitch { get; set; }
 
-        public DiscordApiClient(string token)
+        public DiscordApiClient(string token) : this(token, HeaderProfile.Load())
         {
-            var handler = new HttpClientHandler();
-            handler.AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate;
+        }
 
-            _httpClient = new HttpClient(handler);
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", token);
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9042 Chrome/120.0.6099.291 Electron/28.2.10 Safari/537.36");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://discord.com");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Sec-Ch-Ua", "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\"");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Sec-Ch-Ua-Mobile", "?0");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Sec-Ch-Ua-Platform", "\"Windows\"");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Sec-Fetch-Dest", "empty");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Sec-Fetch-Mode", "cors");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Sec-Fetch-Site", "same-origin");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-Debug-Options", "bugReporterEnabled");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-Discord-Locale:", "en-US");
-            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-Discord-Timezone", "America/Los_Angeles");
+        /// <summary>
+        /// All headers come from the header profile (headerprofile.json); the token is added per request and the
+        /// client_build_number is resolved from discord.com at first use. <paramref name="network"/> is for tests.
+        /// </summary>
+        public DiscordApiClient(string token, HeaderProfile profile, HttpMessageHandler network = null, BuildNumberProvider buildNumbers = null)
+        {
+            foreach (var problem in HeaderProfileValidator.Validate(profile))
+            {
+                Console.WriteLine($"Header profile warning ({profile.Source}): {problem}");
+            }
+
+            buildNumbers ??= new BuildNumberProvider(profile);
+            _httpClient = DiscordHttp.CreateClient(profile, buildNumbers, _ => new ValueTask<string>(token), network: network);
         }
 
         private async Task HandleRateLimitAsync(HttpResponseMessage response)
@@ -86,7 +83,7 @@ namespace Disctalk
         {
             Server server = new Server();
 
-            string url = $"https://discord.com/api/v9/guilds/{guildId}" + (preview ? "/preview" : "");
+            string url = $"{DiscordHttp.ApiBase}/guilds/{guildId}" + (preview ? "/preview" : "");
             var request = new HttpRequestMessage(new HttpMethod("GET"), url);
             HttpResponseMessage response = await _httpClient.SendAsync(request);
 
@@ -114,7 +111,7 @@ namespace Disctalk
         {
             bool rv = false;
 
-            string url = "https://discord.com/api/v9/users/@me/guilds";
+            string url = $"{DiscordHttp.ApiBase}/users/@me/guilds";
             var request = new HttpRequestMessage(new HttpMethod("GET"), url);
             HttpResponseMessage response = await _httpClient.SendAsync(request);
 
@@ -143,7 +140,7 @@ namespace Disctalk
         {
             List<Channel> channels = new List<Channel>();
 
-            string url = $"https://discord.com/api/v9/guilds/{serverId}/channels";
+            string url = $"{DiscordHttp.ApiBase}/guilds/{serverId}/channels";
             var request = new HttpRequestMessage(new HttpMethod("GET"), url);
             HttpResponseMessage response = await _httpClient.SendAsync(request);
 
@@ -178,7 +175,7 @@ namespace Disctalk
             {
                 int fetchCount = remainingMessages > MessagesPerFetch ? MessagesPerFetch : remainingMessages;
 
-                string url = $"https://discord.com/api/v9/channels/{channel.Id}/messages?limit={fetchCount}";
+                string url = $"{DiscordHttp.ApiBase}/channels/{channel.Id}/messages?limit={fetchCount}";
 
                 if (lastMessageId != null)
                 {
@@ -265,7 +262,7 @@ namespace Disctalk
         {
             RootUserObject user = null;
 
-            string url = $"https://discord.com/api/v9/users/{userId}/profile";
+            string url = $"{DiscordHttp.ApiBase}/users/{userId}/profile";
             var request = new HttpRequestMessage(new HttpMethod("GET"), url);
             HttpResponseMessage response = await _httpClient.SendAsync(request);
 
@@ -306,7 +303,7 @@ namespace Disctalk
         {
             UserServerInfo user = null;
 
-            string url = $"https://discord.com/api/v9/guilds/{serverId}/members/{userId}";
+            string url = $"{DiscordHttp.ApiBase}/guilds/{serverId}/members/{userId}";
             var request = new HttpRequestMessage(new HttpMethod("GET"), url);
             HttpResponseMessage response = await _httpClient.SendAsync(request);
 
@@ -353,7 +350,7 @@ namespace Disctalk
         {
             bool rv = false;
 
-            string url = $"https://discord.com/api/v9/channels/{channelId}/messages";
+            string url = $"{DiscordHttp.ApiBase}/channels/{channelId}/messages";
             var obj = new { content = text };
             string jsonContent = JsonConvert.SerializeObject(obj);
 

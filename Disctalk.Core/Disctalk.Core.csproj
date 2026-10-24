@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The repo-root headerprofile.json is baked in as the default; a headerprofile.json next to the exe overrides it. -->
+    <EmbeddedResource Include="..\headerprofile.json" Link="headerprofile.json" LogicalName="Disctalk.Core.headerprofile.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Disctalk.Tests" />
   </ItemGroup>
 
