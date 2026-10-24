@@ -1,0 +1,12 @@
+{
+  "solution": {
+    "path": "DisctalkClient.slnx",
+    "projects": [
+      "Disctalk.Core/Disctalk.Core.csproj",
+      "DisctalkClient.Core/DisctalkClient.Core.csproj",
+      "DisctalkClient.UI/DisctalkClient.UI.csproj",
+      "DisctalkClient.DevHost/DisctalkClient.DevHost.csproj",
+      "DisctalkClient.Tests/DisctalkClient.Tests.csproj"
+    ]
+  }
+}
