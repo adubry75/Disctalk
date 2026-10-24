@@ -90,16 +90,18 @@ else
     [Parameter] public EventCallback<(ChatMessage Message, EmojiRef Emoji)> OnToggleReaction { get; set; }
 
     object? _lastKey;
+    bool _changed = true;
 
     // Messages are immutable records, so reference equality tells us when one changed. Skipping unchanged rows keeps
     // long channels cheap: markdown is only re-rendered for messages that actually changed.
-    protected override bool ShouldRender()
+    protected override void OnParametersSet()
     {
         var key = (Message, Grouped, Compact, Selected, CanEdit, Version);
-        if (Equals(key, _lastKey)) return false;
+        _changed = !Equals(key, _lastKey);
         _lastKey = key;
-        return true;
     }
+
+    protected override bool ShouldRender() => _changed;
 
     ulong? GuildId => Message.GuildId;
 

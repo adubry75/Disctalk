@@ -2,5 +2,6 @@
   <Project Path="Disctalk.Core/Disctalk.Core.csproj" />
   <Project Path="DisctalkClient.Core/DisctalkClient.Core.csproj" />
   <Project Path="DisctalkClient.DevHost/DisctalkClient.DevHost.csproj" />
+  <Project Path="DisctalkClient.Tests/DisctalkClient.Tests.csproj" />
   <Project Path="DisctalkClient.UI/DisctalkClient.UI.csproj" />
 </Solution>
