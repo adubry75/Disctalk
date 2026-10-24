@@ -175,7 +175,11 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--bg-3); border
         background: rgba(0, 0, 0, .55);
         animation: dt-fade .2s ease;
     }
-    .dt-message { padding-right: 8px !important; }
+    .dt-message { padding-right: 8px !important; grid-template-columns: 60px minmax(0, 1fr); }
+    .dt-system { grid-template-columns: 60px auto 1fr; }
+    .dt-reply-preview::before { left: -30px; width: 24px; }
+    .dt-chat-topic { display: none; }
+    .dt-chat-header { padding-left: 4px; }
     .dt-message-actions { right: 8px !important; }
     .dt-composer, .dt-composer-banner, .dt-composer-files { margin-left: 8px !important; margin-right: 8px !important; }
 }
@@ -318,7 +322,7 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--bg-3); border
 .dt-chat-header-icon { color: var(--text-muted); }
 .dt-chat-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-strong); white-space: nowrap; }
 .dt-chat-topic { min-width: 0; padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--border); color: var(--text-muted); font-size: 14px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.dt-chat-topic .md { display: inline; }
+.dt-chat-topic .md { display: inline; white-space: nowrap; }
 
 .dt-scroller { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column-reverse; overscroll-behavior: contain; }
 .dt-message-list { padding: 0 0 16px; }
@@ -385,7 +389,9 @@ img.dt-gutter { margin-top: 2px; cursor: default; }
     border-top-left-radius: 6px;
 }
 .dt-reply-author { font-weight: 500; color: var(--text-strong); white-space: nowrap; }
-.dt-reply-content { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dt-reply-content { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dt-reply-content.md { white-space: nowrap; }
+.dt-reply-content .md-emoji { width: 16px; height: 16px; }
 .dt-reply-missing { font-style: italic; }
 
 .dt-system { grid-template-columns: 72px auto 1fr; align-items: center; color: var(--text-muted); }
@@ -506,7 +512,7 @@ h3.md-h { font-size: 16px; }
 .dt-embed-title { font-weight: 600; color: var(--text-strong); }
 .dt-embed-title a { color: var(--link); }
 .dt-embed-description { font-size: 14px; }
-.dt-embed-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.dt-embed-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .dt-embed-field { grid-column: 1 / -1; font-size: 14px; }
 .dt-embed-field.inline { grid-column: auto; }
 .dt-embed-field-name { font-weight: 600; color: var(--text-strong); margin-bottom: 2px; }
@@ -583,6 +589,8 @@ h3.md-h { font-size: 16px; }
     background: transparent;
     line-height: 1.375;
 }
+.dt-composer textarea:focus-visible { outline: none; }
+.dt-composer:focus-within { box-shadow: 0 0 0 1px var(--accent-soft); }
 .dt-composer textarea::placeholder { color: var(--text-muted); }
 .dt-composer > .dt-icon-btn, .dt-attach { margin-bottom: 4px; }
 .dt-attach { cursor: pointer; }

@@ -47,10 +47,22 @@ public sealed class TimestampFormatter(SettingsService settings, TimeProvider ti
             't' or 'T' => local.ToString(TimeFormat, Culture),
             'd' => local.ToString("d", Culture),
             'D' => local.ToString("D", Culture),
-            'F' => $"{local.ToString("dddd, ", Culture)}{local.ToString("D", Culture)} {local.ToString(TimeFormat, Culture)}",
+            'F' => $"{local.ToString(LongDateWithWeekday, Culture)} {local.ToString(TimeFormat, Culture)}",
             'R' => FormatRelative(value),
-            _ => $"{local.ToString("D", Culture)} {local.ToString(TimeFormat, Culture)}", // 'f' and default
+            _ => $"{local.ToString(LongDateWithoutWeekday, Culture)} {local.ToString(TimeFormat, Culture)}", // 'f' and default
         };
+    }
+
+    // Some cultures' long date pattern includes the weekday (en-US: "dddd, MMMM d, yyyy"), others don't.
+    string LongDateWithWeekday => Culture.DateTimeFormat.LongDatePattern.Contains("dddd") ? Culture.DateTimeFormat.LongDatePattern : "dddd, " + Culture.DateTimeFormat.LongDatePattern;
+
+    string LongDateWithoutWeekday
+    {
+        get
+        {
+            var pattern = Culture.DateTimeFormat.LongDatePattern.Replace("dddd, ", "").Replace("dddd,", "").Replace("dddd ", "").Replace("dddd", "").Trim(' ', ',');
+            return pattern.Length > 0 ? pattern : "d";
+        }
     }
 
     public string FormatRelative(DateTimeOffset value)

@@ -21,7 +21,7 @@ else
                 {
                     <img class="dt-avatar dt-avatar-xs" src="@parent.Author.AvatarUrl" alt="" />
                     <span class="dt-reply-author" style="@ColorStyle(parent.Author)">@NameOf(parent.Author)</span>
-                    <span class="dt-reply-content">@(Snippet(parent))</span>
+                    <MarkdownText Text="@Snippet(parent)" GuildId="GuildId" Options="MarkdownOptions.InlineOnly" Class="dt-reply-content" />
                 }
                 else
                 {
@@ -72,6 +72,9 @@ else
 }
 
 @code {
+    // Razor output isn't visible to the regex source generator, so this one is constructed at runtime.
+    static readonly System.Text.RegularExpressions.Regex CodeFenceRegex = new(@"```[A-Za-z0-9_+\-.#]*\n?", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     [Parameter, EditorRequired] public ChatMessage Message { get; set; } = default!;
     [Parameter] public bool Grouped { get; set; }
     [Parameter] public bool Compact { get; set; }
@@ -100,7 +103,8 @@ else
 
     ulong? GuildId => Message.GuildId;
 
-    bool MentionsMe => Client.CurrentUser is { } me &&
+    // Our own messages (bot or our webhook) never highlight, even when they mention the bot.
+    bool MentionsMe => Client.CurrentUser is { } me && !CanEdit && Message.Author.Id != me.Id &&
         (Message.MentionsEveryone || Message.MentionedUserIds.Contains(me.Id) ||
          (GuildId is ulong g && Client.GetMember(g, me.Id) is { } self && Message.MentionedRoleIds.Any(self.RoleIds.Contains)));
 
@@ -112,7 +116,8 @@ else
 
     static string Snippet(ChatMessage m)
     {
-        var text = m.Content.ReplaceLineEndings(" ");
+        // One line, no code fences: the preview is a hint, not the message.
+        var text = CodeFenceRegex.Replace(m.Content, "").ReplaceLineEndings(" ").Trim();
         if (text.Length == 0) return m.Attachments.Count > 0 ? "Click to see attachment" : m.Embeds.Count > 0 ? "Embed" : "";
         return text.Length > 120 ? text[..120] + "…" : text;
     }

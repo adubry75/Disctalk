@@ -60,7 +60,8 @@
         var token = await Tokens.GetTokenAsync();
         _needsToken = string.IsNullOrWhiteSpace(token);
         _initialized = true;
-        if (!_needsToken) await ConnectAsync(token!, save: false);
+        // Another window/circuit may already own the connection (Android activity recreation, a second browser tab).
+        if (!_needsToken && Client.State is ConnectionState.Disconnected or ConnectionState.Failed) await ConnectAsync(token!, save: false);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

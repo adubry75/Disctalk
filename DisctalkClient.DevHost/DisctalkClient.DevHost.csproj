@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Linux/macOS/Windows dev host: runs the same Razor UI in a browser (Blazor Server) so it can be built,
+       run and tested without MAUI workloads. Pass the demo argument (see README) for fake data without a bot token. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>disctalkclient-devhost</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DisctalkClient.UI\DisctalkClient.UI.csproj" />
+  </ItemGroup>
+
+</Project>
