@@ -1,0 +1,46 @@
+{
+  "_comment": "Captured from Discord web client in Chrome 155 / Windows on 2026-10-23. Values marked <runtime> must be generated per launch, never hardcoded.",
+  "capturedOn": "2026-10-23",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://discord.com",
+    "Referer": "https://discord.com/channels/@me",
+    "Sec-Ch-Ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": "\"Windows\"",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "X-Debug-Options": "bugReporterEnabled",
+    "X-Discord-Locale": "en-US",
+    "X-Discord-Timezone": "America/Los_Angeles"
+  },
+  "superProperties": {
+    "_comment": "Serialize in exactly this key order, compact JSON, then base64 -> X-Super-Properties header. Also send as 'properties' in the gateway IDENTIFY payload.",
+    "os": "Windows",
+    "browser": "Chrome",
+    "device": "",
+    "device_model_name": "",
+    "system_locale": "en-US",
+    "has_client_mods": false,
+    "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "browser_version": "155.0.0.0",
+    "os_version": "10",
+    "referrer": "",
+    "referring_domain": "",
+    "referrer_current": "",
+    "referring_domain_current": "",
+    "release_channel": "stable",
+    "client_build_number": 649389,
+    "client_event_source": null,
+    "client_launch_id": "<runtime: new random UUID v4 per app launch>",
+    "launch_signature": "<runtime: new random UUID v4 per app launch>",
+    "client_app_state": "focused"
+  },
+  "buildNumber": {
+    "_comment": "client_build_number goes stale weekly. Refresh at startup by scanning discord.com/app's script bundles for build_number; fall back to the value above.",
+    "fallback": 649389
+  }
+}
