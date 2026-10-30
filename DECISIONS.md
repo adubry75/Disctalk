@@ -84,3 +84,24 @@ so any of them can be reversed deliberately.
 21. **Demo mode got DMs, a thread, a forward and a fake archive** so the new UI can be tried without a token
     (`dotnet run --project DisctalkClient.DevHost --launch-profile Demo`). It was checked in headless Chromium at
     desktop and phone widths (DMs, thread view, search, jump), with no console errors.
+
+## Not done (deliberately), and what I'd do next
+
+- **Read acks to Discord** (#9): one `POST /channels/{id}/messages/{id}/ack` when you open an unread channel would
+  sync read state with your other devices. Left out to keep the request count minimal; it's a small addition.
+- **Notifications** (Android push / Windows toasts) weren't in the backlog. Android would need a foreground service
+  to keep the gateway alive in the background, which costs battery. Worth a conversation first.
+- **Release signing for Android.** CI APKs are signed with the debug key, which is fine for sideloading on your own
+  phone. Updating over a debug-signed install from another machine needs the same key (or an uninstall first).
+- **Jump to very old messages** (beyond 250 back) would need "around" pagination and a message cache with gaps.
+- **FULLTEXT index** on `messages.content` if archive searches get slow. That's a schema change to the archiver's
+  database, so I didn't make it.
+
+## First real run checklist (for you)
+
+1. `dotnet run --project DisctalkClient -f net10.0-windows10.0.19041.0` (or grab the CI artifact).
+2. Sign-in screen → **My account** → paste the same token the archiver uses.
+3. Expect: Direct Messages + all servers in the picker. Open a channel and scroll up for history; a message from your
+   phone appears live, with seconds in the timestamp.
+4. Settings → Archive search → your MySQL details → **Test & save**, then 🔍.
+5. To check reconnects, toggle Wi-Fi: the banner says "Reconnecting…", then clears without a full reload.
