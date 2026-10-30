@@ -13,7 +13,7 @@ public sealed record AllowedMentions
     public static AllowedMentions None { get; } = new();
 }
 
-public sealed record BotMessageRequest
+public sealed record SendMessageRequest
 {
     public required ulong ChannelId { get; init; }
     public required string Content { get; init; }
@@ -23,11 +23,11 @@ public sealed record BotMessageRequest
 }
 
 /// <summary>The slice of Discord's REST API the client uses with the bot token.</summary>
-public interface IBotRestApi
+public interface IDiscordRestApi
 {
     Task<IReadOnlyList<ChatMessage>> GetMessagesBeforeAsync(ulong channelId, ulong? beforeMessageId, int limit, CancellationToken cancellationToken = default);
 
-    Task<ChatMessage> SendMessageAsync(BotMessageRequest request, CancellationToken cancellationToken = default);
+    Task<ChatMessage> SendMessageAsync(SendMessageRequest request, CancellationToken cancellationToken = default);
 
     Task<ChatMessage> EditMessageAsync(ulong channelId, ulong messageId, string content, AllowedMentions allowedMentions, CancellationToken cancellationToken = default);
 

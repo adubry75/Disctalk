@@ -1,8 +1,16 @@
 namespace DisctalkClient.Core.Models;
 
-public sealed record GuildInfo(ulong Id, string Name, string? IconUrl);
+public sealed record GuildInfo(ulong Id, string Name, string? IconUrl)
+{
+    /// <summary>DMs and group DMs are grouped under a pseudo guild with this id (no real guild has id 0).</summary>
+    public const ulong DirectMessagesId = 0;
 
-public enum ChannelKind { Text, Announcement, Category, Voice, Forum, Other }
+    public static GuildInfo DirectMessages { get; } = new(DirectMessagesId, "Direct Messages", null);
+
+    public bool IsDirectMessages => Id == DirectMessagesId;
+}
+
+public enum ChannelKind { Text, Announcement, Category, Voice, Forum, Other, DirectMessage, GroupDirectMessage, Thread }
 
 public sealed record ChannelInfo
 {
@@ -14,9 +22,14 @@ public sealed record ChannelInfo
     public int Position { get; init; }
     public string? Topic { get; init; }
     public ulong? LastMessageId { get; init; }
+    /// <summary>DMs: the other person's avatar (or the group icon).</summary>
+    public string? IconUrl { get; init; }
 
     /// <summary>Channels the client shows a message pane for.</summary>
-    public bool IsMessageable => Kind is ChannelKind.Text or ChannelKind.Announcement;
+    public bool IsMessageable => Kind is ChannelKind.Text or ChannelKind.Announcement or ChannelKind.DirectMessage
+        or ChannelKind.GroupDirectMessage or ChannelKind.Thread;
+
+    public bool IsPrivate => Kind is ChannelKind.DirectMessage or ChannelKind.GroupDirectMessage;
 }
 
 public sealed record RoleInfo

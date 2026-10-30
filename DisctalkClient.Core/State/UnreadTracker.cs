@@ -22,6 +22,17 @@ public sealed class UnreadTracker
         }
     }
 
+    /// <summary>
+    /// Discord's own read markers (user accounts, from READY). Never moves a marker backwards, so reading on this
+    /// device wins over a stale server value.
+    /// </summary>
+    public void SeedLastRead(IReadOnlyDictionary<ulong, ulong> lastRead)
+    {
+        lock (_lock)
+            foreach (var (channel, id) in lastRead)
+                _lastRead[channel] = Math.Max(id, _lastRead.GetValueOrDefault(channel));
+    }
+
     /// <returns>True if the channel just went from read to unread.</returns>
     public bool OnMessage(ulong channelId, ulong messageId, bool isActiveChannel)
     {

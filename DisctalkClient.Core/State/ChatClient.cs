@@ -67,6 +67,8 @@ public sealed class ChatClient : IAsyncDisposable
     public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
     public string? StatusDetail { get; private set; }
     public AuthorInfo? CurrentUser { get; private set; }
+    /// <summary>The kind of account of the current (or last) connection.</summary>
+    public AccountKind Account { get; private set; } = AccountKind.User;
     public ulong? ActiveChannelId { get; private set; }
 
     sealed class GuildState(GuildInfo info)
@@ -79,14 +81,15 @@ public sealed class ChatClient : IAsyncDisposable
 
     // ---------------------------------------------------------------- connection
 
-    public async Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
+    public async Task ConnectAsync(AccountKind kind, string token, CancellationToken cancellationToken = default)
     {
-        if (BotTokenValidator.Validate(botToken) is { } problem) throw new ArgumentException(problem, nameof(botToken));
+        if (TokenValidator.Validate(kind, token) is { } problem) throw new ArgumentException(problem, nameof(token));
         await DisconnectAsync().ConfigureAwait(false);
 
         _unread.Restore(await _store.GetAsync(UnreadStorageKey).ConfigureAwait(false));
 
-        var connection = _factory.Create(BotTokenValidator.Normalize(botToken));
+        var connection = _factory.Create(kind, TokenValidator.Normalize(kind, token));
+        Account = kind;
         _webhooks = new WebhookDirectory(connection.Rest, () => CurrentUser?.Id);
         _sender = new MessageSender(connection.Rest, _webhooks, _webhookExecutor, _settings, () => CurrentUser?.Id);
         connection.EventReceived += OnEventAsync;
@@ -142,7 +145,8 @@ public sealed class ChatClient : IAsyncDisposable
 
     public IReadOnlyList<GuildInfo> Guilds
     {
-        get { lock (_lock) return _guilds.Values.Select(g => g.Info).OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList(); }
+        // Direct Messages first (user accounts), then servers by name.
+        get { lock (_lock) return _guilds.Values.Select(g => g.Info).OrderBy(g => !g.IsDirectMessages).ThenBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList(); }
     }
 
     public GuildInfo? GetGuild(ulong guildId)
@@ -232,6 +236,12 @@ public sealed class ChatClient : IAsyncDisposable
         Raise(new ClientChange(ChangeKind.Unread, GetChannel(id)?.GuildId, id));
 
         var guildId = GetChannel(id)?.GuildId;
+        if (guildId is ulong focusGuild && _connection is { } focused)
+            _ = Task.Run(async () =>
+            {
+                try { await focused.FocusChannelAsync(focusGuild, id).ConfigureAwait(false); }
+                catch (Exception ex) { _log.LogDebug("Channel focus failed: {Error}", SecretRedactor.Redact(ex.Message)); }
+            });
         if (_settings.Current.LastChannelId != id)
             _ = _settings.UpdateAsync(s => s with { LastChannelId = id, LastGuildId = guildId ?? s.LastGuildId });
 
@@ -285,7 +295,7 @@ public sealed class ChatClient : IAsyncDisposable
     // ---------------------------------------------------------------- actions
 
     MessageSender Sender => _sender ?? throw new InvalidOperationException("Not connected.");
-    IBotRestApi Rest => _connection?.Rest ?? throw new InvalidOperationException("Not connected.");
+    IDiscordRestApi Rest => _connection?.Rest ?? throw new InvalidOperationException("Not connected.");
 
     public async Task SendAsync(OutgoingMessage message, CancellationToken cancellationToken = default)
     {
@@ -311,7 +321,7 @@ public sealed class ChatClient : IAsyncDisposable
     string ExpandEmoji(ulong channelId, string content) =>
         GetChannel(channelId)?.GuildId is ulong guildId ? EmojiShortcodes.Expand(content, GetEmojis(guildId)) : content;
 
-    /// <summary>Adds the bot's reaction, or removes it if the bot already reacted with that emoji.</summary>
+    /// <summary>Adds our reaction, or removes it if we already reacted with that emoji.</summary>
     public async Task ToggleReactionAsync(ChatMessage message, EmojiRef emoji, CancellationToken cancellationToken = default)
     {
         var current = GetMessage(message.ChannelId, message.Id) ?? message;
@@ -453,6 +463,17 @@ public sealed class ChatClient : IAsyncDisposable
                 Ingest(m.Message, isEdit: true);
                 break;
 
+            case MessagePatchEvent p:
+                bool patched;
+                lock (_lock) patched = _messages.GetValueOrDefault(p.ChannelId)?.Patch(p.MessageId, p.Embeds, p.Content, p.EditedAt) ?? false;
+                if (patched) Raise(new ClientChange(ChangeKind.Messages, GetChannel(p.ChannelId)?.GuildId, p.ChannelId));
+                break;
+
+            case ReadStateEvent r:
+                _unread.SeedLastRead(r.LastReadMessageIds);
+                Raise(new ClientChange(ChangeKind.Unread));
+                break;
+
             case MessageDeleteEvent d:
                 bool removed;
                 lock (_lock) removed = _messages.GetValueOrDefault(d.ChannelId)?.Remove(d.MessageIds) ?? false;
@@ -487,9 +508,15 @@ public sealed class ChatClient : IAsyncDisposable
     {
         var channel = GetChannel(message.ChannelId);
         message = WithGuild(message, channel?.GuildId);
-        bool changed;
+        bool changed, reordered = false;
         lock (_lock)
         {
+            // Keep LastMessageId current: DMs are listed by most recent activity.
+            if (!isEdit && channel is not null && message.Id > (channel.LastMessageId ?? 0))
+            {
+                _channels[channel.Id] = channel with { LastMessageId = message.Id };
+                reordered = channel.IsPrivate;
+            }
             var cache = GetCache(message.ChannelId);
             if (isEdit) changed = cache.Update(message);
             else
@@ -512,6 +539,7 @@ public sealed class ChatClient : IAsyncDisposable
                 Raise(new ClientChange(ChangeKind.Unread, message.GuildId, message.ChannelId));
             }
         }
+        if (reordered) Raise(new ClientChange(ChangeKind.Channels, message.GuildId, message.ChannelId));
         if (changed) Raise(new ClientChange(ChangeKind.Messages, message.GuildId, message.ChannelId));
     }
 

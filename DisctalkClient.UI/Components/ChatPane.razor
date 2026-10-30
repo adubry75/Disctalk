@@ -30,7 +30,7 @@
         <div class="dt-empty">
             <Icon Name="cat" Size="64" />
             <p>@(Client.Guilds.Count == 0 && Client.State == ConnectionState.Connected
-                ? "The bot isn't in any server yet. Use the invite link from the README."
+                ? (Client.Account == AccountKind.Bot ? "The bot isn't in any server yet. Use the invite link from the README." : "You're not in any server yet.")
                 : "Pick a channel to start chatting.")</p>
         </div>
     }

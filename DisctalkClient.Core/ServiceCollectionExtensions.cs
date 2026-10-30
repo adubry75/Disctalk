@@ -19,7 +19,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<SettingsService>();
         services.TryAddSingleton(sp => new TimestampFormatter(sp.GetRequiredService<SettingsService>(), sp.GetRequiredService<TimeProvider>()));
-        services.TryAddSingleton<IDiscordConnectionFactory, NetCordConnectionFactory>();
+        services.TryAddSingleton<IDiscordConnectionFactory>(sp => new DiscordConnectionFactory(sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
         services.TryAddSingleton<IWebhookExecutor>(_ => HttpWebhookExecutor.CreateDefault());
         services.TryAddSingleton<ChatClient>();
         return services;

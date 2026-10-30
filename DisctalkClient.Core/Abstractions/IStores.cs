@@ -8,12 +8,14 @@ public interface ISettingsStore
     ValueTask RemoveAsync(string key);
 }
 
-/// <summary>Where the bot token lives. MAUI: SecureStorage. Implementations must never log the value.</summary>
+/// <summary>
+/// Where the tokens live, one per <see cref="AccountKind"/>. MAUI: SecureStorage. Implementations must never log the value.
+/// </summary>
 public interface ITokenStore
 {
-    ValueTask<string?> GetTokenAsync();
-    ValueTask SaveTokenAsync(string token);
-    ValueTask ClearTokenAsync();
+    ValueTask<string?> GetTokenAsync(AccountKind kind);
+    ValueTask SaveTokenAsync(AccountKind kind, string token);
+    ValueTask ClearTokenAsync(AccountKind kind);
 }
 
 public sealed class InMemorySettingsStore : ISettingsStore
@@ -39,12 +41,33 @@ public sealed class InMemorySettingsStore : ISettingsStore
     }
 }
 
-/// <summary>Keeps the token for the life of the process only.</summary>
-public sealed class InMemoryTokenStore(string? token = null) : ITokenStore
+/// <summary>Keeps the tokens for the life of the process only.</summary>
+public sealed class InMemoryTokenStore : ITokenStore
 {
-    string? _token = token;
+    readonly Dictionary<AccountKind, string> _tokens = new();
+    readonly Lock _lock = new();
 
-    public ValueTask<string?> GetTokenAsync() => ValueTask.FromResult(_token);
-    public ValueTask SaveTokenAsync(string token) { _token = token; return ValueTask.CompletedTask; }
-    public ValueTask ClearTokenAsync() { _token = null; return ValueTask.CompletedTask; }
+    public InMemoryTokenStore() { }
+
+    public InMemoryTokenStore(AccountKind kind, string? token)
+    {
+        if (!string.IsNullOrWhiteSpace(token)) _tokens[kind] = token;
+    }
+
+    public ValueTask<string?> GetTokenAsync(AccountKind kind)
+    {
+        lock (_lock) return ValueTask.FromResult(_tokens.GetValueOrDefault(kind));
+    }
+
+    public ValueTask SaveTokenAsync(AccountKind kind, string token)
+    {
+        lock (_lock) _tokens[kind] = token;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask ClearTokenAsync(AccountKind kind)
+    {
+        lock (_lock) _tokens.Remove(kind);
+        return ValueTask.CompletedTask;
+    }
 }

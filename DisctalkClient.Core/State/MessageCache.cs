@@ -52,6 +52,21 @@ public sealed class MessageCache(int maxMessages = MessageCache.DefaultMaxMessag
         return true;
     }
 
+    /// <summary>Applies a partial update (late link-preview embeds and the like). Null fields stay as they are.</summary>
+    public bool Patch(ulong messageId, IReadOnlyList<EmbedInfo>? embeds, string? content, DateTimeOffset? editedAt)
+    {
+        int i = IndexOf(messageId);
+        if (i < 0) return false;
+        var m = _messages[i];
+        _messages[i] = m with
+        {
+            Embeds = embeds ?? m.Embeds,
+            Content = content ?? m.Content,
+            EditedAt = editedAt ?? m.EditedAt,
+        };
+        return true;
+    }
+
     public bool Remove(IEnumerable<ulong> messageIds)
     {
         bool removed = false;

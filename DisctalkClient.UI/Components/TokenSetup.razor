@@ -2,15 +2,31 @@
     <div class="dt-setup-card">
         <div class="dt-setup-logo"><Icon Name="cat" Size="56" /></div>
         <h1>Disctalk Client</h1>
-        <p>Connect with your <strong>bot</strong> account. The token is stored in this device's secure storage and only sent to Discord.</p>
+
+        <div class="dt-segmented dt-setup-kind" role="radiogroup" aria-label="Account">
+            <button role="radio" aria-checked="@(Kind == AccountKind.User)" class="@(Kind == AccountKind.User ? "on" : "")"
+                    disabled="@Busy" @onclick="() => SetKind(AccountKind.User)"><Icon Name="user" Size="16" /> My account</button>
+            <button role="radio" aria-checked="@(Kind == AccountKind.Bot)" class="@(Kind == AccountKind.Bot ? "on" : "")"
+                    disabled="@Busy" @onclick="() => SetKind(AccountKind.Bot)"><Icon Name="bot" Size="16" /> Bot</button>
+        </div>
+
+        @if (Kind == AccountKind.User)
+        {
+            <p>Sign in as <strong>yourself</strong>, with the same browser identity your archiver uses. The token is kept in this device's secure storage and only ever sent to Discord.</p>
+        }
+        else
+        {
+            <p>Connect with your <strong>bot</strong> account (catbot). The token is kept in this device's secure storage and only ever sent to Discord.</p>
+        }
 
         @if (!string.IsNullOrEmpty(Error))
         {
             <div class="dt-setup-error" role="alert">@Error</div>
         }
 
-        <label for="dt-token">Bot token</label>
-        <input id="dt-token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the token from Developer Portal → Bot"
+        <label for="dt-token">@(Kind == AccountKind.User ? "User token" : "Bot token")</label>
+        <input id="dt-token" type="password" autocomplete="off" spellcheck="false"
+               placeholder="@(Kind == AccountKind.User ? "Paste your Discord user token" : "Paste the token from Developer Portal → Bot")"
                @bind="_token" @bind:event="oninput" @onkeydown="OnKey" disabled="@Busy" />
         @if (_validation is { } v)
         {
@@ -22,12 +38,24 @@
 
         <details class="dt-setup-help">
             <summary>Where do I get a token?</summary>
-            <ol>
-                <li>Open the Discord Developer Portal → your application → <em>Bot</em>.</li>
-                <li>Turn on <em>Server Members Intent</em> and <em>Message Content Intent</em>.</li>
-                <li>Click <em>Reset Token</em> and copy it here. Never share it.</li>
-                <li>Invite the bot to your server with the link in the README.</li>
-            </ol>
+            @if (Kind == AccountKind.User)
+            {
+                <ol>
+                    <li>It's the same token your archiver reads from <code>MY_BOT_TOKEN</code>.</li>
+                    <li>Or: open discord.com in a desktop browser, press F12 → <em>Network</em>, click any request to <code>/api/v10</code> or <code>/api/v9</code>, and copy the <em>Authorization</em> request header.</li>
+                    <li>Anyone with this token can act as you. Never share it. Logging out of Discord or changing your password resets it.</li>
+                    <li>Third-party clients are against Discord's terms; using one is your call.</li>
+                </ol>
+            }
+            else
+            {
+                <ol>
+                    <li>Open the Discord Developer Portal → your application → <em>Bot</em>.</li>
+                    <li>Turn on <em>Server Members Intent</em> and <em>Message Content Intent</em>.</li>
+                    <li>Click <em>Reset Token</em> and copy it here. Never share it.</li>
+                    <li>Invite the bot to your server with the link in the README.</li>
+                </ol>
+            }
         </details>
     </div>
 </div>
@@ -36,9 +64,18 @@
     string _token = "";
     string? _validation;
 
+    [Parameter] public AccountKind Kind { get; set; } = AccountKind.User;
+    [Parameter] public EventCallback<AccountKind> KindChanged { get; set; }
     [Parameter] public string? Error { get; set; }
     [Parameter] public bool Busy { get; set; }
     [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    async Task SetKind(AccountKind kind)
+    {
+        if (kind == Kind) return;
+        _validation = null;
+        await KindChanged.InvokeAsync(kind);
+    }
 
     async Task OnKey(KeyboardEventArgs e)
     {
@@ -47,9 +84,9 @@
 
     async Task Submit()
     {
-        _validation = Core.Security.BotTokenValidator.Validate(_token);
+        _validation = Core.Security.TokenValidator.Validate(Kind, _token);
         if (_validation is not null) return;
-        var token = Core.Security.BotTokenValidator.Normalize(_token);
+        var token = Core.Security.TokenValidator.Normalize(Kind, _token);
         _token = "";
         await OnSubmit.InvokeAsync(token);
     }

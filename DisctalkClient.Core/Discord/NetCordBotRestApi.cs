@@ -4,7 +4,7 @@ using NetCord.Rest;
 
 namespace DisctalkClient.Core.Discord;
 
-internal sealed class NetCordBotRestApi(RestClient rest) : IBotRestApi
+internal sealed class NetCordBotRestApi(RestClient rest) : IDiscordRestApi
 {
     public async Task<IReadOnlyList<ChatMessage>> GetMessagesBeforeAsync(ulong channelId, ulong? beforeMessageId, int limit, CancellationToken cancellationToken = default)
     {
@@ -23,7 +23,7 @@ internal sealed class NetCordBotRestApi(RestClient rest) : IBotRestApi
         return result;
     }
 
-    public async Task<ChatMessage> SendMessageAsync(BotMessageRequest request, CancellationToken cancellationToken = default)
+    public async Task<ChatMessage> SendMessageAsync(SendMessageRequest request, CancellationToken cancellationToken = default)
     {
         var properties = new MessageProperties
         {

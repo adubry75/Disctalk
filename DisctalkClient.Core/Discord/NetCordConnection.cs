@@ -46,7 +46,9 @@ public sealed class NetCordConnection : IDiscordConnection
 
     public event Func<GatewayEvent, ValueTask>? EventReceived;
 
-    public IBotRestApi Rest { get; }
+    public AccountKind Kind => AccountKind.Bot;
+
+    public IDiscordRestApi Rest { get; }
 
     public async Task StartAsync(CancellationToken cancellationToken = default) =>
         await _client.StartAsync(cancellationToken: cancellationToken).ConfigureAwait(false);

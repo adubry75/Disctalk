@@ -80,6 +80,9 @@ public sealed record StickerInfo(ulong Id, string Name, string ImageUrl);
 
 public enum ChatMessageKind { Default, Reply, System }
 
+/// <summary>A thread started from a message (shown as a chip under it).</summary>
+public sealed record ThreadRef(ulong Id, string Name, int MessageCount);
+
 public sealed record ChatMessage
 {
     public required ulong Id { get; init; }
@@ -103,6 +106,10 @@ public sealed record ChatMessage
     public ChatMessageKind Kind { get; init; } = ChatMessageKind.Default;
     /// <summary>Human-readable text for system messages (joins, pins, boosts...).</summary>
     public string? SystemText { get; init; }
+    /// <summary>The thread started from this message, if any.</summary>
+    public ThreadRef? Thread { get; init; }
+    /// <summary>Forwarded from another channel: content, attachments and embeds are the forwarded message's.</summary>
+    public bool IsForwarded { get; init; }
 
     public bool IsEdited => EditedAt is not null;
 }

@@ -12,7 +12,7 @@
     }
     else if (ShowSetup)
     {
-        <TokenSetup Error="@SetupError" Busy="_connecting" OnSubmit="ConnectWithNewToken" />
+        <TokenSetup Kind="_kind" KindChanged="ChooseKind" Error="@SetupError" Busy="_connecting" OnSubmit="ConnectWithNewToken" />
     }
     else
     {
@@ -35,7 +35,7 @@
         </div>
         @if (Ui.SettingsOpen)
         {
-            <SettingsPage OnSignOut="ForgetToken" />
+            <SettingsPage OnSignOut="ForgetToken" OnSwitchAccount="SwitchAccount" />
         }
     }
     <Lightbox />
@@ -44,6 +44,7 @@
 
 @code {
     bool _initialized, _connecting, _needsToken;
+    AccountKind _kind = AccountKind.User;
     string? _connectError;
     ulong? _activeChannel;
     DotNetObjectReference<DisctalkApp>? _self;
@@ -56,10 +57,11 @@
     protected override async Task OnInitializedAsync()
     {
         await Settings.LoadAsync();
-        var token = await Tokens.GetTokenAsync();
+        // Another window/circuit may already own the connection (Android activity recreation, a second browser tab).
+        _kind = Client.State is ConnectionState.Disconnected or ConnectionState.Failed ? S.Account : Client.Account;
+        var token = await Tokens.GetTokenAsync(_kind);
         _needsToken = string.IsNullOrWhiteSpace(token);
         _initialized = true;
-        // Another window/circuit may already own the connection (Android activity recreation, a second browser tab).
         if (!_needsToken && Client.State is ConnectionState.Disconnected or ConnectionState.Failed) await ConnectAsync(token!, save: false);
     }
 
@@ -105,6 +107,25 @@
 
     async Task ConnectWithNewToken(string token) => await ConnectAsync(token, save: true);
 
+    /// <summary>The sign-in screen's account switch: use that kind's saved token if there is one.</summary>
+    async Task ChooseKind(AccountKind kind)
+    {
+        _kind = kind;
+        _connectError = null;
+        if (await Tokens.GetTokenAsync(kind) is { Length: > 0 } saved) await ConnectAsync(saved, save: false);
+    }
+
+    async Task SwitchAccount(AccountKind kind)
+    {
+        Ui.CloseSettings();
+        await Client.DisconnectAsync();
+        _kind = kind;
+        _connectError = null;
+        var token = await Tokens.GetTokenAsync(kind);
+        _needsToken = string.IsNullOrWhiteSpace(token);
+        if (!_needsToken) await ConnectAsync(token!, save: false);
+    }
+
     async Task ConnectAsync(string token, bool save)
     {
         _connecting = true;
@@ -112,8 +133,9 @@
         StateHasChanged();
         try
         {
-            await Client.ConnectAsync(token);
-            if (save) await Tokens.SaveTokenAsync(token);
+            await Client.ConnectAsync(_kind, token);
+            if (save) await Tokens.SaveTokenAsync(_kind, token);
+            if (S.Account != _kind) await Settings.UpdateAsync(s => s with { Account = _kind });
             _needsToken = false;
         }
         catch (Exception ex)
@@ -129,7 +151,7 @@
 
     async Task Reconnect()
     {
-        var token = await Tokens.GetTokenAsync();
+        var token = await Tokens.GetTokenAsync(_kind);
         if (string.IsNullOrWhiteSpace(token)) _needsToken = true;
         else await ConnectAsync(token, save: false);
     }
@@ -138,7 +160,7 @@
     {
         Ui.CloseSettings();
         await Client.DisconnectAsync();
-        await Tokens.ClearTokenAsync();
+        await Tokens.ClearTokenAsync(_kind);
         _connectError = null;
         _needsToken = true;
     }

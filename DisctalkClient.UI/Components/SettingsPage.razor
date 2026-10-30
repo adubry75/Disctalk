@@ -67,7 +67,7 @@
             <div class="dt-field">
                 <span class="dt-field-label">Send messages as</span>
                 <div class="dt-segmented" role="radiogroup" aria-label="Send mode">
-                    <button role="radio" aria-checked="@(S.SendMode == SendMode.Bot)" class="@(S.SendMode == SendMode.Bot ? "on" : "")" @onclick="() => Apply(s => s with { SendMode = SendMode.Bot })"><Icon Name="bot" Size="16" /> The bot</button>
+                    <button role="radio" aria-checked="@(S.SendMode == SendMode.Bot)" class="@(S.SendMode == SendMode.Bot ? "on" : "")" @onclick="() => Apply(s => s with { SendMode = SendMode.Bot })"><Icon Name="@(IsUser ? "user" : "bot")" Size="16" /> @(IsUser ? "Me" : "The bot")</button>
                     <button role="radio" aria-checked="@(S.SendMode == SendMode.Webhook)" class="@(S.SendMode == SendMode.Webhook ? "on" : "")" @onclick="() => Apply(s => s with { SendMode = SendMode.Webhook })"><Icon Name="webhook" Size="16" /> Webhook persona</button>
                 </div>
             </div>
@@ -86,7 +86,7 @@
                     <input id="dt-wh-avatar" type="url" placeholder="https://…/avatar.png" value="@S.WebhookAvatarUrl"
                            @onchange="e => Apply(s => s with { WebhookAvatarUrl = e.Value?.ToString() ?? string.Empty })" />
                 </div>
-                <small class="dt-hint">The bot creates one webhook named "Disctalk Client" per channel (needs Manage Webhooks). Replies sent this way include a link to the original, since webhooks can't make real replies.</small>
+                <small class="dt-hint">The client creates one webhook named "Disctalk Client" per channel (needs Manage Webhooks). Replies sent this way include a link to the original, since webhooks can't make real replies.</small>
             </div>
             <label class="dt-toggle">
                 <input type="checkbox" checked="@S.PingOnReply" @onchange="e => Apply(s => s with { PingOnReply = (bool)e.Value! })" />
@@ -94,7 +94,7 @@
             </label>
             <label class="dt-toggle">
                 <input type="checkbox" checked="@S.SendTypingIndicator" @onchange="e => Apply(s => s with { SendTypingIndicator = (bool)e.Value! })" />
-                <span>Show the bot as typing while I type <small>(bot mode)</small></span>
+                <span>Send my typing indicator while I type</span>
             </label>
             <label class="dt-toggle">
                 <input type="checkbox" checked="@S.AllowEveryoneMentions" @onchange="e => Apply(s => s with { AllowEveryoneMentions = (bool)e.Value! })" />
@@ -108,11 +108,14 @@
             {
                 <div class="dt-account">
                     <img class="dt-avatar" src="@me.AvatarUrl" alt="" />
-                    <div><strong>@me.DisplayName</strong><br /><small>@me.Username · bot</small></div>
+                    <div><strong>@me.DisplayName</strong><br /><small>@me.Username · @(IsUser ? "your account" : "bot")</small></div>
                 </div>
             }
             <div class="dt-settings-row">
-                <button class="dt-btn" @onclick="() => Apply(_ => new ClientSettings { LastGuildId = S.LastGuildId, LastChannelId = S.LastChannelId })">Reset settings</button>
+                <button class="dt-btn" @onclick="() => Settings.ResetAsync()">Reset settings</button>
+                <button class="dt-btn" @onclick="() => OnSwitchAccount.InvokeAsync(IsUser ? AccountKind.Bot : AccountKind.User)">
+                    <Icon Name="@(IsUser ? "bot" : "user")" Size="16" /> @(IsUser ? "Switch to the bot" : "Switch to my account")
+                </button>
                 <button class="dt-btn danger" @onclick="OnSignOut"><Icon Name="logout" Size="16" /> Forget token &amp; disconnect</button>
             </div>
         </section>
@@ -129,6 +132,9 @@
     ];
 
     [Parameter] public EventCallback OnSignOut { get; set; }
+    [Parameter] public EventCallback<AccountKind> OnSwitchAccount { get; set; }
+
+    bool IsUser => Client.Account == AccountKind.User;
 
     IReadOnlyList<string> _errors = [];
     string _timestampFormat = "";

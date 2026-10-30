@@ -20,7 +20,7 @@ public sealed class SendException(string message, Exception? inner = null) : Exc
 /// Routes sends, edits and deletes either through the bot user or through the channel webhook, based on the
 /// send-mode setting (or the message's own author for edits/deletes).
 /// </summary>
-public sealed class MessageSender(IBotRestApi rest, WebhookDirectory webhooks, IWebhookExecutor webhookExecutor, SettingsService settings, Func<ulong?> botUserId)
+public sealed class MessageSender(IDiscordRestApi rest, WebhookDirectory webhooks, IWebhookExecutor webhookExecutor, SettingsService settings, Func<ulong?> botUserId)
 {
     public const int MaxContentLength = 2000;
     public const int MaxFiles = 10;
@@ -37,7 +37,7 @@ public sealed class MessageSender(IBotRestApi rest, WebhookDirectory webhooks, I
         if (mode == SendMode.Webhook) return await SendViaWebhookAsync(message, content, s, cancellationToken).ConfigureAwait(false);
 
         if (content.Length > MaxContentLength) throw new SendException($"Message is {content.Length} characters; Discord allows {MaxContentLength}.");
-        return await rest.SendMessageAsync(new BotMessageRequest
+        return await rest.SendMessageAsync(new SendMessageRequest
         {
             ChannelId = message.ChannelId,
             Content = content,
@@ -66,7 +66,7 @@ public sealed class MessageSender(IBotRestApi rest, WebhookDirectory webhooks, I
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new SendException("Couldn't get a webhook for this channel. Does the bot have the Manage Webhooks permission?", ex);
+            throw new SendException("Couldn't get a webhook for this channel. It needs the Manage Webhooks permission.", ex);
         }
 
         var payload = new WebhookPayload
@@ -99,7 +99,7 @@ public sealed class MessageSender(IBotRestApi rest, WebhookDirectory webhooks, I
             return null;
         }
 
-        if (message.Author.Id != botUserId()) throw new SendException("The bot can only edit its own messages.");
+        if (message.Author.Id != botUserId()) throw new SendException("You can only edit your own messages.");
         return await rest.EditMessageAsync(message.ChannelId, message.Id, newContent,
             MentionPolicy.For(newContent, s.AllowEveryoneMentions, pingRepliedUser: s.PingOnReply), cancellationToken).ConfigureAwait(false);
     }

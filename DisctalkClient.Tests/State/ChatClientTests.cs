@@ -30,17 +30,17 @@ public class ChatClientTests
 
     async Task LoginAsync()
     {
-        await _client.ConnectAsync(TestData.Token);
+        await _client.ConnectAsync(AccountKind.Bot, TestData.Token);
         await Conn.LoginAsync();
     }
 
     [Fact]
     public async Task Connect_validates_and_normalizes_the_token()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => _client.ConnectAsync("not a token"));
+        await Assert.ThrowsAsync<ArgumentException>(() => _client.ConnectAsync(AccountKind.Bot, "not a token"));
         Assert.Null(_factory.LastToken);
 
-        await _client.ConnectAsync("Bot " + TestData.Token);
+        await _client.ConnectAsync(AccountKind.Bot, "Bot " + TestData.Token);
         Assert.Equal(TestData.Token, _factory.LastToken);
         Assert.True(Conn.Started);
         Assert.Equal(ConnectionState.Connecting, _client.State);
@@ -166,12 +166,12 @@ public class ChatClientTests
     public async Task Send_expands_server_emoji_and_shows_the_message_immediately()
     {
         await LoginAsync();
-        Conn.Rest.SendMessageAsync(Arg.Any<BotMessageRequest>(), Arg.Any<CancellationToken>())
-            .Returns(c => TestData.Message(c.Arg<BotMessageRequest>().Content, TestData.Bot));
+        Conn.Rest.SendMessageAsync(Arg.Any<SendMessageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(c => TestData.Message(c.Arg<SendMessageRequest>().Content, TestData.Bot));
 
         await _client.SendAsync(new OutgoingMessage { ChannelId = TestData.GeneralId, Content = "hi :blobcat:" });
 
-        await Conn.Rest.Received(1).SendMessageAsync(Arg.Is<BotMessageRequest>(r => r.Content == "hi <:blobcat:900000000000000500>"), Arg.Any<CancellationToken>());
+        await Conn.Rest.Received(1).SendMessageAsync(Arg.Is<SendMessageRequest>(r => r.Content == "hi <:blobcat:900000000000000500>"), Arg.Any<CancellationToken>());
         Assert.Equal("hi <:blobcat:900000000000000500>", Assert.Single(_client.GetMessages(TestData.GeneralId)).Content);
     }
 
@@ -196,7 +196,7 @@ public class ChatClientTests
     {
         Conn.StartFailure = new InvalidOperationException($"boom while using {TestData.Token}");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _client.ConnectAsync(TestData.Token));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _client.ConnectAsync(AccountKind.Bot, TestData.Token));
 
         Assert.Equal(ConnectionState.Failed, _client.State);
         Assert.DoesNotContain(TestData.Token, _client.StatusDetail);

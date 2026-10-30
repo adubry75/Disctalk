@@ -10,7 +10,7 @@ public class MessageSenderTests
     const ulong HookId = 900000000000000700;
     static readonly WebhookInfo OwnHook = new(HookId, TestData.GeneralId, WebhookDirectory.WebhookName, "hook-secret-token", TestData.BotId);
 
-    readonly IBotRestApi _rest = Substitute.For<IBotRestApi>();
+    readonly IDiscordRestApi _rest = Substitute.For<IDiscordRestApi>();
     readonly IWebhookExecutor _executor = Substitute.For<IWebhookExecutor>();
     readonly SettingsService _settings = new(new InMemorySettingsStore());
     readonly WebhookDirectory _webhooks;
@@ -20,8 +20,8 @@ public class MessageSenderTests
     {
         _webhooks = new WebhookDirectory(_rest, () => TestData.BotId);
         _sender = new MessageSender(_rest, _webhooks, _executor, _settings, () => TestData.BotId);
-        _rest.SendMessageAsync(Arg.Any<BotMessageRequest>(), Arg.Any<CancellationToken>())
-            .Returns(c => TestData.Message(c.Arg<BotMessageRequest>().Content, TestData.Bot));
+        _rest.SendMessageAsync(Arg.Any<SendMessageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(c => TestData.Message(c.Arg<SendMessageRequest>().Content, TestData.Bot));
         _executor.ExecuteAsync(default!, default!, default!, default).ReturnsForAnyArgs(1UL);
     }
 
@@ -39,7 +39,7 @@ public class MessageSenderTests
         var sent = await _sender.SendAsync(new OutgoingMessage { ChannelId = TestData.GeneralId, Content = "hi  " });
 
         Assert.NotNull(sent);
-        await _rest.Received(1).SendMessageAsync(Arg.Is<BotMessageRequest>(r => r.ChannelId == TestData.GeneralId && r.Content == "hi"), Arg.Any<CancellationToken>());
+        await _rest.Received(1).SendMessageAsync(Arg.Is<SendMessageRequest>(r => r.ChannelId == TestData.GeneralId && r.Content == "hi"), Arg.Any<CancellationToken>());
         await _rest.DidNotReceiveWithAnyArgs().GetChannelWebhooksAsync(default);
         await _executor.DidNotReceiveWithAnyArgs().ExecuteAsync(default!, default!, default!);
     }
@@ -54,7 +54,7 @@ public class MessageSenderTests
 
         await _sender.SendAsync(new OutgoingMessage { ChannelId = TestData.GeneralId, Content = "reply", ReplyTo = parent });
 
-        await _rest.Received(1).SendMessageAsync(Arg.Is<BotMessageRequest>(r =>
+        await _rest.Received(1).SendMessageAsync(Arg.Is<SendMessageRequest>(r =>
             r.ReplyToMessageId == parent.Id && r.Content == "reply" && r.AllowedMentions.RepliedUser == ping), Arg.Any<CancellationToken>());
     }
 
@@ -81,7 +81,7 @@ public class MessageSenderTests
     {
         var file = new OutgoingFile("cat.png", new byte[] { 1, 2, 3 }, "image/png");
         await _sender.SendAsync(new OutgoingMessage { ChannelId = TestData.GeneralId, Files = [file] });
-        await _rest.Received(1).SendMessageAsync(Arg.Is<BotMessageRequest>(r => r.Files.Count == 1 && r.Files[0].FileName == "cat.png"), Arg.Any<CancellationToken>());
+        await _rest.Received(1).SendMessageAsync(Arg.Is<SendMessageRequest>(r => r.Files.Count == 1 && r.Files[0].FileName == "cat.png"), Arg.Any<CancellationToken>());
     }
 
     [Fact]

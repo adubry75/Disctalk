@@ -29,3 +29,7 @@ public sealed record ReactionRemoveEvent(ulong ChannelId, ulong MessageId, ulong
 /// <summary>All reactions (Emoji null) or every reaction of one emoji were removed.</summary>
 public sealed record ReactionClearEvent(ulong ChannelId, ulong MessageId, EmojiRef? Emoji) : GatewayEvent;
 public sealed record TypingStartEvent(ulong ChannelId, ulong UserId, MemberInfo? Member, DateTimeOffset Timestamp) : GatewayEvent;
+/// <summary>A partial MESSAGE_UPDATE (no author): e.g. link-preview embeds arriving after the message.</summary>
+public sealed record MessagePatchEvent(ulong ChannelId, ulong MessageId, IReadOnlyList<EmbedInfo>? Embeds, string? Content = null, DateTimeOffset? EditedAt = null) : GatewayEvent;
+/// <summary>User accounts: the last message read in each channel, from READY. Seeds unread state.</summary>
+public sealed record ReadStateEvent(IReadOnlyDictionary<ulong, ulong> LastReadMessageIds) : GatewayEvent;

@@ -1,34 +1,39 @@
 using System.Security.Cryptography;
 using System.Text;
+using DisctalkClient.Core.Abstractions;
 
 namespace DisctalkClient.Services;
 
-// Unpackaged Windows apps may not get SecureStorage; fall back to a DPAPI (current user) encrypted file.
+// Unpackaged Windows apps may not get SecureStorage; fall back to a DPAPI (current user) encrypted file per account kind.
 public sealed partial class SecureTokenStore
 {
-    static string FallbackPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DisctalkClient", "token.bin");
+    static string FallbackPath(AccountKind kind) => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DisctalkClient", kind == AccountKind.Bot ? "token.bin" : "user-token.bin");
 
-    partial void FallbackGetCore(ref string? token)
+    partial void FallbackGetCore(AccountKind kind, ref string? token)
     {
-        if (!File.Exists(FallbackPath)) return;
+        var path = FallbackPath(kind);
+        if (!File.Exists(path)) return;
         try
         {
-            token = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(FallbackPath), null, DataProtectionScope.CurrentUser));
+            token = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(path), null, DataProtectionScope.CurrentUser));
         }
         catch (CryptographicException)
         {
-            File.Delete(FallbackPath);
+            File.Delete(path);
         }
     }
 
-    partial void FallbackSetCore(string token)
+    partial void FallbackSetCore(AccountKind kind, string token)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FallbackPath)!);
-        File.WriteAllBytes(FallbackPath, ProtectedData.Protect(Encoding.UTF8.GetBytes(token), null, DataProtectionScope.CurrentUser));
+        var path = FallbackPath(kind);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, ProtectedData.Protect(Encoding.UTF8.GetBytes(token), null, DataProtectionScope.CurrentUser));
     }
 
-    partial void FallbackClearCore()
+    partial void FallbackClearCore(AccountKind kind)
     {
-        if (File.Exists(FallbackPath)) File.Delete(FallbackPath);
+        var path = FallbackPath(kind);
+        if (File.Exists(path)) File.Delete(path);
     }
 }

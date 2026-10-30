@@ -8,7 +8,7 @@ namespace DisctalkClient.Core.Sending;
 /// Finds (or creates, once) the client's own webhook in each channel. The bot needs Manage Webhooks for this.
 /// Webhooks created by this app are recognized by application id, falling back to the well-known name.
 /// </summary>
-public sealed class WebhookDirectory(IBotRestApi rest, Func<ulong?> applicationId)
+public sealed class WebhookDirectory(IDiscordRestApi rest, Func<ulong?> applicationId)
 {
     public const string WebhookName = "Disctalk Client";
 

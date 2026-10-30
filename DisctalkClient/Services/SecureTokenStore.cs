@@ -3,65 +3,64 @@ using DisctalkClient.Core.Abstractions;
 namespace DisctalkClient.Services;
 
 /// <summary>
-/// The bot token lives in platform secure storage: Android Keystore-backed EncryptedSharedPreferences, Windows
-/// DataProtection. It is entered once, never logged, and never leaves the device except to authenticate with Discord.
+/// Tokens live in platform secure storage: Android Keystore-backed EncryptedSharedPreferences, Windows
+/// DataProtection. One entry per account kind (your user token, the bot token). Entered once, never logged, and never
+/// leaves the device except to authenticate with Discord.
 /// </summary>
 public sealed partial class SecureTokenStore : ITokenStore
 {
-    const string Key = "disctalkclient.bot-token";
+    /// <summary>The bot key predates user mode; keeping it means an existing catbot token still works.</summary>
+    static string Key(AccountKind kind) => kind == AccountKind.Bot ? "disctalkclient.bot-token" : "disctalkclient.user-token";
 
-    public async ValueTask<string?> GetTokenAsync()
+    public async ValueTask<string?> GetTokenAsync(AccountKind kind)
     {
         try
         {
-            return await SecureStorage.Default.GetAsync(Key);
+            return await SecureStorage.Default.GetAsync(Key(kind));
         }
         catch (Exception ex) when (IsUnavailable(ex))
         {
-            return FallbackGet();
+            return FallbackGet(kind);
         }
         catch (Exception)
         {
             // Android can fail to decrypt after a backup restore or key rotation. Forget it; the user re-enters it.
-            SecureStorage.Default.Remove(Key);
+            SecureStorage.Default.Remove(Key(kind));
             return null;
         }
     }
 
-    public async ValueTask SaveTokenAsync(string token)
+    public async ValueTask SaveTokenAsync(AccountKind kind, string token)
     {
         try
         {
-            await SecureStorage.Default.SetAsync(Key, token);
+            await SecureStorage.Default.SetAsync(Key(kind), token);
         }
         catch (Exception ex) when (IsUnavailable(ex))
         {
-            FallbackSet(token);
+            FallbackSetCore(kind, token);
         }
     }
 
-    public ValueTask ClearTokenAsync()
+    public ValueTask ClearTokenAsync(AccountKind kind)
     {
-        try { SecureStorage.Default.Remove(Key); }
+        try { SecureStorage.Default.Remove(Key(kind)); }
         catch (Exception ex) when (IsUnavailable(ex)) { }
-        FallbackClear();
+        FallbackClearCore(kind);
         return ValueTask.CompletedTask;
     }
 
     static bool IsUnavailable(Exception ex) => ex is NotSupportedException or NotImplementedException or PlatformNotSupportedException;
 
     // Platform-specific fallbacks (Platforms/Windows); no-ops elsewhere.
-    partial void FallbackGetCore(ref string? token);
-    partial void FallbackSetCore(string token);
-    partial void FallbackClearCore();
+    partial void FallbackGetCore(AccountKind kind, ref string? token);
+    partial void FallbackSetCore(AccountKind kind, string token);
+    partial void FallbackClearCore(AccountKind kind);
 
-    string? FallbackGet()
+    string? FallbackGet(AccountKind kind)
     {
         string? token = null;
-        FallbackGetCore(ref token);
+        FallbackGetCore(kind, ref token);
         return token;
     }
-
-    void FallbackSet(string token) => FallbackSetCore(token);
-    void FallbackClear() => FallbackClearCore();
 }

@@ -1,3 +1,4 @@
+using DisctalkClient.Core.Abstractions;
 using DisctalkClient.Core.Security;
 
 namespace DisctalkClient.Tests.Security;
@@ -18,6 +19,19 @@ public class SecretRedactorTests
         Assert.Contains("webhooks/123/[REDACTED]", redacted);
     }
 
+    [Fact]
+    public void Redacts_user_tokens_in_headers_gateway_payloads_and_legacy_form()
+    {
+        var mfa = "mfa." + new string('Q', 84);
+        var text = $"Authorization: {TestData.Token}\n{{\"op\":2,\"d\":{{\"token\":\"{mfa}\",\"capabilities\":16}}}} {mfa}";
+
+        var redacted = SecretRedactor.Redact(text);
+
+        Assert.DoesNotContain(TestData.Token, redacted);
+        Assert.DoesNotContain(mfa, redacted);
+        Assert.Contains("\"capabilities\":16", redacted);
+    }
+
     [Theory]
     [InlineData("Unknown Message")]
     [InlineData("see https://discord.com/channels/1/2/3")]
@@ -25,15 +39,31 @@ public class SecretRedactorTests
     public void Leaves_ordinary_text_alone(string text) => Assert.Equal(text, SecretRedactor.Redact(text));
 }
 
-public class BotTokenValidatorTests
+public class TokenValidatorTests
 {
-    [Fact]
-    public void Accepts_token_shaped_strings_and_strips_bot_prefix()
+    [Theory]
+    [InlineData(AccountKind.Bot)]
+    [InlineData(AccountKind.User)]
+    public void Accepts_token_shaped_strings_and_strips_prefixes_and_quotes(AccountKind kind)
     {
-        Assert.Null(BotTokenValidator.Validate(TestData.Token));
-        Assert.Null(BotTokenValidator.Validate("Bot " + TestData.Token));
-        Assert.Equal(TestData.Token, BotTokenValidator.Normalize($"  Bot {TestData.Token} "));
+        Assert.Null(TokenValidator.Validate(kind, TestData.Token));
+        Assert.Null(TokenValidator.Validate(kind, "Bot " + TestData.Token));
+        Assert.Equal(TestData.Token, TokenValidator.Normalize(kind, $"  Bot {TestData.Token} "));
+        // Copying a header value out of devtools often brings the quotes along.
+        Assert.Equal(TestData.Token, TokenValidator.Normalize(kind, $"\"{TestData.Token}\""));
     }
+
+    [Fact]
+    public void Accepts_legacy_mfa_user_tokens_only_in_user_mode()
+    {
+        var mfa = "mfa." + new string('A', 84);
+        Assert.Null(TokenValidator.Validate(AccountKind.User, mfa));
+        Assert.NotNull(TokenValidator.Validate(AccountKind.Bot, mfa));
+    }
+
+    [Fact]
+    public void Reads_the_account_id_from_the_first_segment() =>
+        Assert.Equal(110000000000000100UL, TokenValidator.AccountId(TestData.Token));
 
     [Theory]
     [InlineData("")]
@@ -43,8 +73,11 @@ public class BotTokenValidatorTests
     [InlineData("0123456789abcdef0123456789abcdef")]                   // client secret shape
     public void Rejects_junk_without_echoing_it(string token)
     {
-        var error = BotTokenValidator.Validate(token);
-        Assert.NotNull(error);
-        if (token.Length > 3) Assert.DoesNotContain(token, error);
+        foreach (var kind in Enum.GetValues<AccountKind>())
+        {
+            var error = TokenValidator.Validate(kind, token);
+            Assert.NotNull(error);
+            if (token.Length > 3) Assert.DoesNotContain(token, error);
+        }
     }
 }

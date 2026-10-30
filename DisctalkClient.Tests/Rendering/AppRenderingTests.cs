@@ -26,7 +26,7 @@ public class AppRenderingTests : UiTestBase
         await cut.Find(".dt-setup .dt-btn").ClickAsync(new());
 
         Assert.Equal(TestData.Token, Factory.LastToken);
-        Assert.Equal(TestData.Token, await Tokens.GetTokenAsync());
+        Assert.Equal(TestData.Token, await Tokens.GetTokenAsync(AccountKind.User));
         Assert.Empty(cut.FindAll(".dt-setup"));
     }
 
@@ -37,14 +37,14 @@ public class AppRenderingTests : UiTestBase
         cut.Find("#dt-token").Input("my client secret");
         cut.Find(".dt-setup .dt-btn").Click();
 
-        Assert.Contains("doesn't look like a bot token", cut.Find(".dt-field-error").TextContent);
+        Assert.Contains("doesn't look like a user token", cut.Find(".dt-field-error").TextContent);
         Assert.Null(Factory.LastToken);
     }
 
     [Fact]
     public async Task Stored_token_connects_and_opens_the_first_text_channel()
     {
-        await Tokens.SaveTokenAsync(TestData.Token);
+        await Tokens.SaveTokenAsync(AccountKind.User, TestData.Token);
         Conn.Rest.GetMessagesBeforeAsync(default, default, default).ReturnsForAnyArgs([TestData.Message("welcome!", TestData.Ada)]);
 
         var cut = Render<DisctalkApp>();
@@ -150,7 +150,7 @@ public class AppRenderingTests : UiTestBase
         cut.Find("textarea").Input("answer");
         await cut.InvokeAsync(() => cut.Instance.SendAsync());
 
-        await Conn.Rest.Received(1).SendMessageAsync(Arg.Is<BotMessageRequest>(r => r.ReplyToMessageId == parent.Id && r.Content == "answer"), Arg.Any<CancellationToken>());
+        await Conn.Rest.Received(1).SendMessageAsync(Arg.Is<SendMessageRequest>(r => r.ReplyToMessageId == parent.Id && r.Content == "answer"), Arg.Any<CancellationToken>());
         Assert.Null(Ui.ReplyingTo);
     }
 
@@ -193,14 +193,14 @@ public class AppRenderingTests : UiTestBase
     [Fact]
     public async Task Forgetting_the_token_disconnects_and_returns_to_setup()
     {
-        await Tokens.SaveTokenAsync(TestData.Token);
+        await Tokens.SaveTokenAsync(AccountKind.User, TestData.Token);
         var cut = Render<DisctalkApp>();
         await cut.InvokeAsync(() => Conn.LoginAsync());
         await cut.InvokeAsync(Ui.OpenSettings);
 
         await cut.Find(".dt-settings .dt-btn.danger").ClickAsync(new());
 
-        Assert.Null(await Tokens.GetTokenAsync());
+        Assert.Null(await Tokens.GetTokenAsync(AccountKind.User));
         Assert.NotNull(cut.Find(".dt-setup"));
         Assert.Equal(ConnectionState.Disconnected, Client.State);
     }
@@ -208,7 +208,7 @@ public class AppRenderingTests : UiTestBase
     [Fact]
     public async Task Components_unsubscribe_from_client_events_when_disposed()
     {
-        await Tokens.SaveTokenAsync(TestData.Token);
+        await Tokens.SaveTokenAsync(AccountKind.User, TestData.Token);
         var cut = Render<DisctalkApp>();
         await cut.InvokeAsync(() => Conn.LoginAsync());
         Assert.True(ChangedHandlerCount() > 0);

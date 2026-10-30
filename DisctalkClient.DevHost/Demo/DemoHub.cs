@@ -54,7 +54,7 @@ public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
         Seed();
     }
 
-    public IDiscordConnection Create(string botToken) => _active = new DemoConnection(this);
+    public IDiscordConnection Create(AccountKind kind, string token) => _active = new DemoConnection(this);
 
     internal GuildSnapshot Snapshot() => new(
         new GuildInfo(GuildId, "Cat Café", null),

@@ -73,7 +73,15 @@ public sealed class FakeConnection : IDiscordConnection
 {
     public event Func<GatewayEvent, ValueTask>? EventReceived;
 
-    public IBotRestApi Rest { get; } = Substitute.For<IBotRestApi>();
+    public AccountKind Kind { get; set; } = AccountKind.User;
+    public IDiscordRestApi Rest { get; } = Substitute.For<IDiscordRestApi>();
+    public List<(ulong Guild, ulong Channel)> Focused { get; } = new();
+
+    public ValueTask FocusChannelAsync(ulong guildId, ulong channelId)
+    {
+        lock (Focused) Focused.Add((guildId, channelId));
+        return ValueTask.CompletedTask;
+    }
     public bool Started { get; private set; }
     public Exception? StartFailure { get; set; }
 
@@ -101,10 +109,13 @@ public sealed class FakeConnectionFactory : IDiscordConnectionFactory
 {
     public FakeConnection Connection { get; private set; } = new();
     public string? LastToken { get; private set; }
+    public AccountKind? LastKind { get; private set; }
 
-    public IDiscordConnection Create(string botToken)
+    public IDiscordConnection Create(AccountKind kind, string token)
     {
-        LastToken = botToken;
+        LastToken = token;
+        LastKind = kind;
+        Connection.Kind = kind;
         return Connection;
     }
 

@@ -3,13 +3,15 @@ using DisctalkClient.Core.Models;
 
 namespace DisctalkClient.DevHost.Demo;
 
-internal sealed class DemoConnection(DemoHub hub) : IDiscordConnection, IBotRestApi
+internal sealed class DemoConnection(DemoHub hub) : IDiscordConnection, IDiscordRestApi
 {
     readonly CancellationTokenSource _cts = new();
 
     public event Func<GatewayEvent, ValueTask>? EventReceived;
 
-    public IBotRestApi Rest => this;
+    public AccountKind Kind => AccountKind.User;
+
+    public IDiscordRestApi Rest => this;
 
     public async ValueTask Emit(GatewayEvent e)
     {
@@ -43,7 +45,7 @@ internal sealed class DemoConnection(DemoHub hub) : IDiscordConnection, IBotRest
         return hub.Before(channelId, beforeMessageId, limit);
     }
 
-    public async Task<ChatMessage> SendMessageAsync(BotMessageRequest request, CancellationToken cancellationToken = default)
+    public async Task<ChatMessage> SendMessageAsync(SendMessageRequest request, CancellationToken cancellationToken = default)
     {
         var replyTo = request.ReplyToMessageId is ulong id ? hub.Get(request.ChannelId, id) : null;
         var message = hub.Post(request.ChannelId, DemoHub.Bot, request.Content, replyTo, ToAttachments(request.Files));

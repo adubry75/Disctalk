@@ -75,7 +75,7 @@
 
     string StateLabel => Client.State switch
     {
-        ConnectionState.Connected => "Online as bot",
+        ConnectionState.Connected => Client.Account == AccountKind.Bot ? "Online as bot" : "Online",
         ConnectionState.Reconnecting => "Reconnecting…",
         ConnectionState.Connecting => "Connecting…",
         _ => Client.State.ToString(),

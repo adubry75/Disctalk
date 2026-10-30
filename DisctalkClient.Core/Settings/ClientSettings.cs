@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using DisctalkClient.Core.Abstractions;
 
 namespace DisctalkClient.Core.Settings;
 
@@ -12,7 +13,7 @@ public enum CatAccent { Ginger, Siamese, Calico, Tabby, Tuxedo }
 [JsonConverter(typeof(JsonStringEnumConverter<SendMode>))]
 public enum SendMode
 {
-    /// <summary>Post as the bot user.</summary>
+    /// <summary>Post as the signed-in account (you, or the bot in bot mode). Stored as "Bot" for compatibility.</summary>
     Bot,
     /// <summary>Post through a channel webhook with the configured display name and avatar.</summary>
     Webhook,
@@ -37,6 +38,9 @@ public sealed record ClientSettings
     public bool PingOnReply { get; init; } = true;
     public bool AllowEveryoneMentions { get; init; }
     public bool SendTypingIndicator { get; init; } = true;
+
+    /// <summary>Which account to sign in with at startup: your user account (default) or the bot.</summary>
+    public AccountKind Account { get; init; } = AccountKind.User;
 
     public ulong? LastGuildId { get; init; }
     public ulong? LastChannelId { get; init; }

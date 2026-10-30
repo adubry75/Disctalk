@@ -68,6 +68,7 @@ public sealed class SettingsService(ISettingsStore store)
 
     public Task<SettingsUpdateResult> ResetAsync() => UpdateAsync(current => new ClientSettings
     {
+        Account = current.Account,
         LastGuildId = current.LastGuildId,
         LastChannelId = current.LastChannelId,
     });
@@ -84,6 +85,7 @@ public sealed class SettingsService(ISettingsStore store)
             Theme = Enum.IsDefined(s.Theme) ? s.Theme : defaults.Theme,
             Accent = Enum.IsDefined(s.Accent) ? s.Accent : defaults.Accent,
             SendMode = Enum.IsDefined(s.SendMode) ? s.SendMode : defaults.SendMode,
+            Account = Enum.IsDefined(s.Account) ? s.Account : defaults.Account,
         };
     }
 }

@@ -39,7 +39,7 @@ public abstract class UiTestBase : BunitContext
 
     protected async Task LoginAsync()
     {
-        await Client.ConnectAsync(TestData.Token);
+        await Client.ConnectAsync(AccountKind.Bot, TestData.Token);
         await Conn.LoginAsync();
     }
 }
