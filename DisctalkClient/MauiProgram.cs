@@ -1,6 +1,7 @@
 using DisctalkClient.Core.Abstractions;
 using DisctalkClient.Services;
 using DisctalkClient.UI.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace DisctalkClient;
@@ -14,6 +15,8 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
         builder.Services.AddSingleton<ISettingsStore, PreferencesSettingsStore>();
+        builder.Services.AddSingleton<SecureSecretStore>();
+        builder.Services.AddSingleton<ISecretStore>(sp => sp.GetRequiredService<SecureSecretStore>());
         builder.Services.AddSingleton<ITokenStore, SecureTokenStore>();
         builder.Services.AddDisctalkClient();
 

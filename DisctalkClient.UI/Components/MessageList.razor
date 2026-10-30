@@ -105,6 +105,13 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (Ui.HighlightMessageId is ulong target && Client.GetMessage(ChannelId, target) is not null)
+        {
+            Ui.ClearHighlight();
+            try { await Js.ScrollToMessageAsync(target); }
+            catch (JSException) { }
+            catch (InvalidOperationException) { }
+        }
         if (!firstRender) return;
         _self = DotNetObjectReference.Create(this);
         try { _observer = await Js.ObserveTopAsync(_scroller, _sentinel, _self); }

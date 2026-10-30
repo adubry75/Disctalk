@@ -282,6 +282,33 @@ public sealed class ChatClient : IAsyncDisposable
         return channel;
     }
 
+    /// <summary>Most scrollback pages a jump-to-message may fetch. Older hits stay readable in the search results.</summary>
+    public const int MaxJumpPages = 5;
+
+    /// <summary>
+    /// Makes sure <paramref name="messageId"/> is in the channel's cache by paging back through history, at most
+    /// <see cref="MaxJumpPages"/> pages (polite: a jump never turns into a crawl). Stops early once history is older than
+    /// the message (it was deleted).
+    /// </summary>
+    /// <returns>True if the message is now loaded.</returns>
+    public async Task<bool> LocateMessageAsync(ulong channelId, ulong messageId, CancellationToken cancellationToken = default)
+    {
+        await EnsureHistoryAsync(channelId, cancellationToken).ConfigureAwait(false);
+        for (int page = 0; ; page++)
+        {
+            ulong? oldest;
+            lock (_lock)
+            {
+                var cache = GetCache(channelId);
+                if (cache.Get(messageId) is not null) return true;
+                if (!cache.HasMoreBefore || page >= MaxJumpPages) return false;
+                oldest = cache.OldestId;
+            }
+            if (oldest is ulong o && o < messageId) return false;
+            if (await LoadOlderAsync(channelId, cancellationToken).ConfigureAwait(false) == 0) return GetMessage(channelId, messageId) is not null;
+        }
+    }
+
     /// <summary>Loads the newest page for a channel the first time it's opened.</summary>
     public async Task EnsureHistoryAsync(ulong channelId, CancellationToken cancellationToken = default)
     {

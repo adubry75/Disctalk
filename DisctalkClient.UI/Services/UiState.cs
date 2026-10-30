@@ -20,6 +20,9 @@ public sealed class UiState
     public ChatMessage? Editing { get; private set; }
     public string? LightboxUrl { get; private set; }
     public string? Toast { get; private set; }
+    public bool SearchOpen { get; private set; }
+    /// <summary>A message to scroll to and flash once it's rendered (set by search results).</summary>
+    public ulong? HighlightMessageId { get; private set; }
 
     public event Action? Changed;
 
@@ -57,6 +60,19 @@ public sealed class UiState
     public void CloseImage() { LightboxUrl = null; Notify(); }
 
     public void ShowToast(string? message) { Toast = message; Notify(); }
+
+    public void ToggleSearch() { SearchOpen = !SearchOpen; ChannelDrawerOpen = MemberDrawerOpen = false; Notify(); }
+    public void CloseSearch() { if (!SearchOpen) return; SearchOpen = false; Notify(); }
+
+    public void JumpTo(ulong guildId, ulong channelId, ulong messageId)
+    {
+        if (ChannelId != channelId) SelectChannel(guildId, channelId);
+        HighlightMessageId = messageId;
+        Notify();
+    }
+
+    /// <summary>The message list calls this after scrolling to the highlighted message.</summary>
+    public void ClearHighlight() => HighlightMessageId = null;
 
     void Notify() => Changed?.Invoke();
 }

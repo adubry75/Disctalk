@@ -1,0 +1,161 @@
+@inherits ClientComponentBase
+@using DisctalkClient.Core.Archive
+@inject ArchiveSearchService Archive
+
+@* Search over the archiver's MySQL database (what the 30-minute archiver has saved), not Discord's own search. *@
+<aside class="dt-search" role="search" aria-label="Archive search">
+    <header class="dt-search-header">
+        <Icon Name="search" Size="18" />
+        <input id="dt-search-input" type="search" placeholder="Search the archive" aria-label="Search the archive" spellcheck="false"
+               @bind="_text" @bind:event="oninput" @onkeydown="OnKey" />
+        <button class="dt-icon-btn" title="Close search" aria-label="Close search" @onclick="Ui.CloseSearch"><Icon Name="x" /></button>
+    </header>
+
+    <div class="dt-search-options">
+        @if (CurrentServer is { } server)
+        {
+            <label class="dt-toggle dt-toggle-sm">
+                <input type="checkbox" checked="@_thisServerOnly" @onchange="e => _thisServerOnly = (bool)e.Value!" />
+                <span>Only @server.Name</span>
+            </label>
+        }
+        <small class="dt-hint">Filters: <code>from:name</code> <code>in:channel</code> <code>after:2025-01-31</code> <code>before:…</code> <code>during:…</code> <code>has:link</code> <code>"exact phrase"</code></small>
+    </div>
+
+    <div class="dt-search-results" aria-live="polite">
+        @if (!_configured)
+        {
+            <div class="dt-search-empty">
+                <p>Archive search reads the database your archiver fills every 30 minutes.</p>
+                <button class="dt-btn" @onclick="Ui.OpenSettings">Set it up in Settings</button>
+            </div>
+        }
+        else if (_error is { } error)
+        {
+            <div class="dt-setup-error" role="alert">@error</div>
+        }
+        else if (_hits.Count == 0 && !_busy && _searched)
+        {
+            <div class="dt-search-empty"><Icon Name="cat" Size="40" /><p>No archived messages match.</p></div>
+        }
+
+        @foreach (var hit in _hits)
+        {
+            var m = hit.Message;
+            <button class="dt-search-hit" @key="hit.MessageId" @onclick="() => Jump(hit)" title="Jump to this message">
+                <div class="dt-search-hit-meta">
+                    <span class="dt-search-channel">#@(hit.ChannelName ?? Client.GetChannel(hit.ChannelId)?.Name ?? hit.ChannelId.ToString())</span>
+                    <time title="@Time.FormatFull(hit.Timestamp)">@Time.FormatMessageTimestamp(hit.Timestamp)</time>
+                </div>
+                <div class="dt-search-hit-body">
+                    <img class="dt-avatar dt-avatar-sm" src="@m.Author.AvatarUrl" alt="" loading="lazy" />
+                    <div>
+                        <strong class="dt-author">@NameOf(hit)</strong>
+                        <MarkdownText Text="@m.Content" GuildId="hit.ServerId" Class="dt-content" />
+                        @if (m.Attachments.Count > 0)
+                        {
+                            <small class="dt-hint"><Icon Name="file" Size="12" /> @m.Attachments.Count @(m.Attachments.Count == 1 ? "attachment" : "attachments")</small>
+                        }
+                    </div>
+                </div>
+            </button>
+        }
+
+        @if (_busy)
+        {
+            <div class="dt-loading"><Icon Name="paw" Size="16" Class="dt-spin" /> Searching…</div>
+        }
+        else if (_page?.HasMore == true)
+        {
+            <button class="dt-btn dt-search-more" @onclick="LoadMore">Load more</button>
+        }
+    </div>
+</aside>
+
+@code {
+    string _text = "";
+    bool _thisServerOnly = true, _busy, _searched, _configured = true;
+    string? _error;
+    string? _lastQuery;
+    ArchiveSearchPage? _page;
+    readonly List<ArchiveHit> _hits = new();
+    CancellationTokenSource? _cts;
+
+    GuildInfo? CurrentServer => Ui.GuildId is ulong id && id != GuildInfo.DirectMessagesId ? Client.GetGuild(id) : null;
+
+    protected override bool Handles(ClientChange change) => change.Kind is ChangeKind.Guilds or ChangeKind.Members;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _configured = await Archive.GetConnectionAsync() is not null;
+    }
+
+    async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SearchAsync(fresh: true);
+        else if (e.Key == "Escape") Ui.CloseSearch();
+    }
+
+    Task LoadMore() => SearchAsync(fresh: false);
+
+    async Task SearchAsync(bool fresh)
+    {
+        _configured = await Archive.GetConnectionAsync() is not null;
+        if (!_configured || string.IsNullOrWhiteSpace(_text) && fresh) return;
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        if (fresh)
+        {
+            _hits.Clear();
+            _page = null;
+            _lastQuery = _text;
+        }
+        _busy = true;
+        _error = null;
+        try
+        {
+            var server = _thisServerOnly ? CurrentServer?.Id : null;
+            _page = await Archive.SearchAsync(_lastQuery ?? _text, server, fresh ? null : _page?.NextCursor, _cts.Token);
+            _hits.AddRange(_page.Hits);
+            _searched = true;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _error = Core.Security.SecretRedactor.Redact(ex.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    string NameOf(ArchiveHit hit) =>
+        hit.ServerId is ulong g && Client.GetMember(g, hit.Message.Author.Id) is { } member ? member.DisplayName : hit.Message.Author.DisplayName;
+
+    async Task Jump(ArchiveHit hit)
+    {
+        if (Client.GetChannel(hit.ChannelId) is not { IsMessageable: true } channel)
+        {
+            Ui.ShowToast("That channel isn't available to this account any more. The archived copy is shown here.");
+            return;
+        }
+        Ui.JumpTo(channel.GuildId, channel.Id, hit.MessageId);
+        if (Client.State != ConnectionState.Connected) return;
+        try
+        {
+            if (!await Client.LocateMessageAsync(channel.Id, hit.MessageId))
+                Ui.ShowToast($"That message is further back than the last {ChatClient.MaxJumpPages * ChatClient.HistoryPageSize} messages (or was deleted). The archived copy is in the results.");
+        }
+        catch (Exception ex)
+        {
+            Ui.ShowToast("Couldn't load that part of the channel: " + Core.Security.SecretRedactor.Redact(ex.Message));
+        }
+    }
+
+    public override void Dispose()
+    {
+        _cts?.Cancel();
+        base.Dispose();
+    }
+}

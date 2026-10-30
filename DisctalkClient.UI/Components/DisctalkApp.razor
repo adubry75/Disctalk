@@ -4,7 +4,7 @@
 @inject DisctalkJs Js
 
 @* The whole client. Hosts (MAUI, dev web host) render just this component. *@
-<div class="dt-app theme-@S.Theme.ToString().ToLowerInvariant() @(Ui.MemberListVisible ? "" : "members-hidden") @(Ui.ChannelDrawerOpen ? "left-open" : "") @(Ui.MemberDrawerOpen ? "right-open" : "")"
+<div class="dt-app theme-@S.Theme.ToString().ToLowerInvariant() @(Ui.MemberListVisible && !Ui.SearchOpen ? "" : "members-hidden") @(Ui.SearchOpen ? "search-open" : "") @(Ui.ChannelDrawerOpen ? "left-open" : "") @(Ui.MemberDrawerOpen ? "right-open" : "")"
      style="--accent:@ClientSettings.AccentHex(S.Accent)">
     @if (!_initialized)
     {
@@ -31,6 +31,10 @@
             <ChannelList />
             <ChatPane />
             <MemberList />
+            @if (Ui.SearchOpen)
+            {
+                <SearchPanel />
+            }
             <div class="dt-backdrop" @onclick="Ui.CloseDrawers" aria-hidden="true"></div>
         </div>
         @if (Ui.SettingsOpen)

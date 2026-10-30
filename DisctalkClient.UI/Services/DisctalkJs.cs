@@ -29,6 +29,10 @@ public sealed class DisctalkJs(IJSRuntime js) : IAsyncDisposable
     public async ValueTask<string> InsertAtCursorAsync(ElementReference textarea, string text) =>
         await (await Module).InvokeAsync<string>("insertAtCursor", textarea, text);
 
+    /// <returns>False if the message isn't rendered.</returns>
+    public async ValueTask<bool> ScrollToMessageAsync(ulong messageId) =>
+        await (await Module).InvokeAsync<bool>("scrollToMessage", $"msg-{messageId}");
+
     public async ValueTask FocusAsync(ElementReference element) =>
         await (await Module).InvokeVoidAsync("focus", element);
 

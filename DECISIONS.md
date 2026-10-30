@@ -54,3 +54,21 @@ so any of them can be reversed deliberately.
     user account.
 11. **Timestamps with seconds (backlog #1)** were already done before this session (`h:mm:ss tt` default, setting
     with presets, all render paths through `TimestampFormatter`). Verified, kept, and re-checked by the tests.
+12. **Archive search reads the archiver's MySQL directly** (`messages` ⟕ `channels`, `usersServerInfo` for nick /
+    global-name matching) with MySqlConnector, the archiver's own driver. Discord-style syntax: words (all must
+    match), `"phrases"`, `from:` (username/nick/display-name prefix or id), `in:` (channel name or id),
+    `after:`/`before:`/`during:` (UTC dates), `has:link`. Every value is a parameter; `%`/`_` are escaped.
+    Plain `LIKE '%…%'` rather than FULLTEXT: the archiver's schema has no full-text index and I won't alter your
+    database from a client. If searches get slow on a big archive, adding a FULLTEXT index is the next step.
+13. **Dates filter on snowflake ids, not the `timestamp` column.** The archiver writes `timestamp` from a Newtonsoft
+    `DateTime` whose time zone depends on the machine; message ids encode exact UTC and are the primary key.
+14. **Connection details are a secret** (they include the DB password): stored in SecureStorage like the tokens,
+    pre-filled from the archiver's `MYSQLHOST`/`MYSQLUSER`/`MYSQLPASSWORD`/`MYSQLDATABASE` (+ optional `MYSQLPORT`)
+    environment variables when present (Windows/dev host). Read-only use; `AllowLoadLocalInfile` off.
+15. **Jump to message pages back at most 5 × 50 messages** (polite: a click never becomes a crawl). Older hits stay
+    readable in the results, rendered from the archived JSON. No "around" windowing, which would mean a cache with
+    gaps.
+16. **MySqlConnector bumped 2.5.0 → 2.6.2 in the archiver too** (NuGet flagged GHSA-473q-m89c-ghf8 on 2.5.0). The
+    archiver still builds; no code changes needed.
+17. **Integration test against a real server.** `MySqlArchiveIntegrationTests` creates archiver-shaped tables and
+    runs the real SQL. It ran green here against MariaDB; it's skipped unless `DISCTALK_TEST_MYSQL` is set.

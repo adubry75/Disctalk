@@ -17,6 +17,7 @@
             }
         }
         <span class="dt-spacer"></span>
+        <button class="dt-icon-btn @(Ui.SearchOpen ? "active" : "")" title="Search the archive" aria-label="Search the archive" @onclick="Ui.ToggleSearch"><Icon Name="search" /></button>
         <button class="dt-icon-btn dt-desktop-only @(Ui.MemberListVisible ? "active" : "")" title="Member list" aria-label="Toggle member list" @onclick="Ui.ToggleMemberList"><Icon Name="users" /></button>
         <button class="dt-icon-btn dt-mobile-only" title="Members" aria-label="Open members" @onclick="Ui.ToggleMemberDrawer"><Icon Name="users" /></button>
     </header>

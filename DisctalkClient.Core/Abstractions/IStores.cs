@@ -41,6 +41,38 @@ public sealed class InMemorySettingsStore : ISettingsStore
     }
 }
 
+/// <summary>Other secrets (the archive database connection, which includes a password). MAUI: SecureStorage.</summary>
+public interface ISecretStore
+{
+    ValueTask<string?> GetAsync(string key);
+    ValueTask SetAsync(string key, string value);
+    ValueTask RemoveAsync(string key);
+}
+
+/// <summary>Keeps secrets for the life of the process only.</summary>
+public sealed class InMemorySecretStore : ISecretStore
+{
+    readonly Dictionary<string, string> _values = new();
+    readonly Lock _lock = new();
+
+    public ValueTask<string?> GetAsync(string key)
+    {
+        lock (_lock) return ValueTask.FromResult(_values.GetValueOrDefault(key));
+    }
+
+    public ValueTask SetAsync(string key, string value)
+    {
+        lock (_lock) _values[key] = value;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask RemoveAsync(string key)
+    {
+        lock (_lock) _values.Remove(key);
+        return ValueTask.CompletedTask;
+    }
+}
+
 /// <summary>Keeps the tokens for the life of the process only.</summary>
 public sealed class InMemoryTokenStore : ITokenStore
 {

@@ -1,4 +1,5 @@
 using DisctalkClient.Core.Abstractions;
+using DisctalkClient.Core.Archive;
 using DisctalkClient.Core.Discord;
 using DisctalkClient.Core.Sending;
 using DisctalkClient.Core.Settings;
@@ -22,6 +23,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IDiscordConnectionFactory>(sp => new DiscordConnectionFactory(sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()));
         services.TryAddSingleton<IWebhookExecutor>(_ => HttpWebhookExecutor.CreateDefault());
         services.TryAddSingleton<ChatClient>();
+        services.TryAddSingleton<ISecretStore, InMemorySecretStore>();
+        services.TryAddSingleton<IArchiveDatabase, MySqlArchiveDatabase>();
+        services.TryAddSingleton<ArchiveSearchService>();
         return services;
     }
 }

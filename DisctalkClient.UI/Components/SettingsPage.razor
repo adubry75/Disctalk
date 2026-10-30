@@ -103,6 +103,34 @@
         </section>
 
         <section>
+            <h2>Archive search</h2>
+            <p class="dt-hint">Search reads the MySQL database your archiver fills. Same values as its <code>MYSQLHOST</code>/<code>MYSQLUSER</code>/<code>MYSQLPASSWORD</code>/<code>MYSQLDATABASE</code>. Kept in secure storage; on a phone, the database must be reachable from it (same network or VPN).</p>
+            <div class="dt-field-grid">
+                <label class="dt-field-label" for="dt-db-host">Host</label>
+                <input id="dt-db-host" type="text" spellcheck="false" placeholder="e.g. 192.168.1.20" @bind="_dbHost" />
+                <label class="dt-field-label" for="dt-db-port">Port</label>
+                <input id="dt-db-port" type="number" min="1" max="65535" @bind="_dbPort" />
+                <label class="dt-field-label" for="dt-db-name">Database</label>
+                <input id="dt-db-name" type="text" spellcheck="false" @bind="_dbName" />
+                <label class="dt-field-label" for="dt-db-user">User</label>
+                <input id="dt-db-user" type="text" spellcheck="false" autocomplete="off" @bind="_dbUser" />
+                <label class="dt-field-label" for="dt-db-pass">Password</label>
+                <input id="dt-db-pass" type="password" autocomplete="off" placeholder="@(_hasSavedPassword ? "(saved — leave empty to keep)" : "")" @bind="_dbPassword" />
+            </div>
+            @if (_dbStatus is { } status)
+            {
+                <div class="@(_dbOk ? "dt-hint" : "dt-field-error")" role="status">@status</div>
+            }
+            <div class="dt-settings-row">
+                <button class="dt-btn primary" disabled="@_dbBusy" @onclick="SaveArchive">@(_dbBusy ? "Testing…" : "Test & save")</button>
+                @if (_hasSavedPassword || !string.IsNullOrEmpty(_dbHost))
+                {
+                    <button class="dt-btn" disabled="@_dbBusy" @onclick="RemoveArchive">Remove</button>
+                }
+            </div>
+        </section>
+
+        <section>
             <h2>Account</h2>
             @if (Client.CurrentUser is { } me)
             {
@@ -131,6 +159,8 @@
         ("15:04", "HH:mm"),
     ];
 
+    [Inject] Core.Archive.ArchiveSearchService Archive { get; set; } = default!;
+
     [Parameter] public EventCallback OnSignOut { get; set; }
     [Parameter] public EventCallback<AccountKind> OnSwitchAccount { get; set; }
 
@@ -146,6 +176,56 @@
     }
 
     protected override bool Handles(ClientChange change) => change.Kind == ChangeKind.Connection;
+
+    string _dbHost = "", _dbName = "", _dbUser = "", _dbPassword = "";
+    int _dbPort = 3306;
+    bool _hasSavedPassword, _dbBusy, _dbOk;
+    string? _dbStatus;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (await Archive.GetConnectionAsync() is { } c)
+        {
+            (_dbHost, _dbPort, _dbName, _dbUser) = (c.Host, (int)c.Port, c.Database, c.User);
+            _hasSavedPassword = c.Password.Length > 0;
+        }
+    }
+
+    async Task SaveArchive()
+    {
+        if (string.IsNullOrWhiteSpace(_dbHost) || string.IsNullOrWhiteSpace(_dbName))
+        {
+            (_dbOk, _dbStatus) = (false, "Host and database are required.");
+            return;
+        }
+        var existing = await Archive.GetConnectionAsync();
+        var password = _dbPassword.Length > 0 ? _dbPassword : existing?.Password ?? "";
+        var connection = new Core.Archive.ArchiveConnection(_dbHost.Trim(), (uint)Math.Clamp(_dbPort, 1, 65535), _dbName.Trim(), _dbUser.Trim(), password);
+        _dbBusy = true;
+        _dbStatus = null;
+        try
+        {
+            var error = await Archive.TestAsync(connection);
+            if (error is null)
+            {
+                await Archive.SaveConnectionAsync(connection);
+                _hasSavedPassword = password.Length > 0;
+                _dbPassword = "";
+            }
+            (_dbOk, _dbStatus) = error is null ? (true, "Connected. Archive search is ready.") : (false, error);
+        }
+        finally
+        {
+            _dbBusy = false;
+        }
+    }
+
+    async Task RemoveArchive()
+    {
+        await Archive.SaveConnectionAsync(null);
+        (_dbHost, _dbPort, _dbName, _dbUser, _dbPassword, _hasSavedPassword) = ("", 3306, "", "", "", false);
+        (_dbOk, _dbStatus) = (true, "Removed.");
+    }
 
     string Preview => SettingsValidator.ValidateTimestampFormat(_timestampFormat) is { } error
         ? error

@@ -86,3 +86,14 @@ export function insertAtCursor(textarea, text) {
 }
 
 export function focus(el) { el?.focus(); }
+
+// Scrolls a message into the middle of the view and flashes it (search "jump to").
+export function scrollToMessage(id) {
+    const el = document.getElementById(id);
+    if (!el) return false;
+    el.scrollIntoView({ block: 'center' });
+    el.classList.remove('dt-flash');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('dt-flash');
+    return true;
+}
