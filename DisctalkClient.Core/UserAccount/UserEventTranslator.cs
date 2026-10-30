@@ -17,7 +17,7 @@ public sealed class UserEventTranslator
     public string? SessionId { get; private set; }
     public string? ResumeGatewayUrl { get; private set; }
 
-    public IReadOnlyList<GatewayEvent> Translate(string type, JsonElement d) => type switch
+    public IReadOnlyList<GatewayEvent> Translate(string type, JsonElement d) => d.ValueKind != JsonValueKind.Object ? [] : type switch
     {
         "READY" => Ready(d),
         "GUILD_CREATE" => d.Bool("unavailable") ? [] : [new GuildAvailableEvent(DiscordJson.ToSnapshot(d, self: Self))],

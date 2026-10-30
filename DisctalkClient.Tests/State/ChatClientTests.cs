@@ -214,6 +214,78 @@ public class ChatClientTests
         Assert.Equal(ConnectionState.Disconnected, _client.State);
     }
 
+    [Fact]
+    public async Task Connect_passes_the_account_kind_to_the_factory()
+    {
+        await _client.ConnectAsync(AccountKind.User, TestData.Token);
+        Assert.Equal((AccountKind.User, TestData.Token), (_factory.LastKind!.Value, _factory.LastToken!));
+        Assert.Equal(AccountKind.User, _client.Account);
+    }
+
+    [Fact]
+    public async Task Discord_read_state_marks_channels_unread_until_opened()
+    {
+        await _client.ConnectAsync(AccountKind.User, TestData.Token);
+        var guild = TestData.Guild();
+        var channels = guild.Channels.Select(c => c.Id == TestData.GeneralId ? c with { LastMessageId = 500 } : c).ToList();
+        await Conn.RaiseAsync(new ReadyEvent(TestData.Bot),
+            new ReadStateEvent(new Dictionary<ulong, ulong> { [TestData.GeneralId] = 400 }),
+            new GuildAvailableEvent(guild with { Channels = channels }));
+
+        Assert.True(_client.IsUnread(TestData.GeneralId));
+        Assert.False(_client.IsUnread(TestData.RandomId)); // not in Discord's read state: starts read
+
+        _client.SetActiveChannel(TestData.GeneralId);
+        Assert.False(_client.IsUnread(TestData.GeneralId));
+    }
+
+    [Fact]
+    public async Task Opening_a_channel_focuses_it_on_the_connection()
+    {
+        await LoginAsync();
+        _client.SetActiveChannel(TestData.GeneralId);
+        await WaitUntil(() => { lock (Conn.Focused) return Conn.Focused.Count > 0; });
+        lock (Conn.Focused) Assert.Equal((TestData.GuildId, TestData.GeneralId), Conn.Focused[0]);
+    }
+
+    [Fact]
+    public async Task Partial_updates_patch_embeds_into_the_cached_message()
+    {
+        await LoginAsync();
+        var m = TestData.Message("https://example.com");
+        await Conn.RaiseAsync(new MessageCreateEvent(m));
+
+        await Conn.RaiseAsync(new MessagePatchEvent(m.ChannelId, m.Id, [new EmbedInfo { Title = "Example" }]));
+
+        var patched = _client.GetMessage(m.ChannelId, m.Id)!;
+        Assert.Equal("Example", Assert.Single(patched.Embeds).Title);
+        Assert.Equal("https://example.com", patched.Content);
+    }
+
+    [Fact]
+    public async Task Direct_messages_come_first_and_sort_by_latest_activity()
+    {
+        await LoginAsync();
+        ChannelInfo Dm(ulong id, string name, ulong last) => new() { Id = id, GuildId = GuildInfo.DirectMessagesId, Name = name, Kind = ChannelKind.DirectMessage, LastMessageId = last };
+        await Conn.RaiseAsync(new GuildAvailableEvent(new GuildSnapshot(GuildInfo.DirectMessages,
+            [Dm(50, "ada", 100), Dm(51, "bob", 200)], [], [], [])));
+
+        Assert.True(_client.Guilds[0].IsDirectMessages);
+        Assert.Equal(["bob", "ada"], ChannelTree.Build(_client.GetChannels(GuildInfo.DirectMessagesId)).Single().Channels.Select(c => c.Name));
+
+        await Conn.RaiseAsync(new MessageCreateEvent(TestData.Message("psst", TestData.Ada, channelId: 50) with { GuildId = null }));
+
+        Assert.Equal(["ada", "bob"], ChannelTree.Build(_client.GetChannels(GuildInfo.DirectMessagesId)).Single().Channels.Select(c => c.Name));
+        Assert.Equal(GuildInfo.DirectMessagesId, _client.GetMessages(50).Single().GuildId);
+        Assert.True(_client.IsUnread(50));
+    }
+
+    static async Task WaitUntil(Func<bool> condition)
+    {
+        for (int i = 0; i < 200 && !condition(); i++) await Task.Delay(10);
+        Assert.True(condition());
+    }
+
     sealed class CapturingLogger : ILogger<ChatClient>
     {
         public List<string> Lines { get; } = new();

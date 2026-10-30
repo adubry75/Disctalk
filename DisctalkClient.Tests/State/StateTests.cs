@@ -206,6 +206,35 @@ public class ChannelTreeTests
         Assert.Equal(["rules", "orphan"], groups[0].Channels.Select(c => c.Name));
         Assert.Equal(["a-chat", "b-chat", "voice-in-text"], groups[1].Channels.Select(c => c.Name));
     }
+
+    [Fact]
+    public void Threads_follow_their_parent_newest_activity_first()
+    {
+        ChannelInfo C(ulong id, string name, ChannelKind kind = ChannelKind.Text, ulong? parent = null, ulong? last = null) =>
+            new() { Id = id, GuildId = TestData.GuildId, Name = name, Kind = kind, ParentId = parent, LastMessageId = last };
+
+        var groups = ChannelTree.Build(
+        [
+            C(1, "general"),
+            C(2, "art"),
+            C(10, "old thread", ChannelKind.Thread, parent: 1, last: 100),
+            C(11, "hot thread", ChannelKind.Thread, parent: 1, last: 900),
+            C(12, "lost thread", ChannelKind.Thread, parent: 999),
+        ]);
+
+        Assert.Equal(["general", "hot thread", "old thread", "art", "lost thread"], groups.Single().Channels.Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Direct_messages_sort_by_latest_message()
+    {
+        ChannelInfo Dm(ulong id, string name, ulong? last) =>
+            new() { Id = id, GuildId = GuildInfo.DirectMessagesId, Name = name, Kind = ChannelKind.DirectMessage, LastMessageId = last };
+
+        var group = Assert.Single(ChannelTree.Build([Dm(1, "quiet", null), Dm(2, "busy", 500), Dm(3, "recent", 900)]));
+        Assert.Null(group.Category);
+        Assert.Equal(["recent", "busy", "quiet"], group.Channels.Select(c => c.Name));
+    }
 }
 
 public class MemberGroupingTests
