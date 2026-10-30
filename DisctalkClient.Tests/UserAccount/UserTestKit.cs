@@ -34,7 +34,11 @@ public sealed class FakeTransport : IGatewayTransport
     readonly Channel<byte[]?> _inbound = Channel.CreateUnbounded<byte[]?>();
     readonly Channel<JsonNode> _outbound = Channel.CreateUnbounded<JsonNode>();
 
+    readonly TaskCompletionSource _connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public Uri? ConnectedTo { get; private set; }
+    /// <summary>Completes once the client called <see cref="ConnectAsync"/>.</summary>
+    public Task Connected => _connected.Task;
     public int? CloseCode { get; set; }
     public int? ClosedByClientWith { get; private set; }
     public Exception? ConnectFailure { get; set; }
@@ -43,6 +47,7 @@ public sealed class FakeTransport : IGatewayTransport
     {
         if (ConnectFailure is not null) throw ConnectFailure;
         ConnectedTo = uri;
+        _connected.TrySetResult();
         return Task.CompletedTask;
     }
 

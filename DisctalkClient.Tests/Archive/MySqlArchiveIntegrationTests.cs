@@ -15,7 +15,7 @@ public sealed class MySqlArchiveIntegrationTests
 
     static ArchiveConnection Connection()
     {
-        var b = new MySqlConnectionStringBuilder(ConnectionString);
+        var b = new MySqlConnectionStringBuilder(ConnectionString!);
         return new ArchiveConnection(b.Server, b.Port, b.Database, b.UserID, b.Password);
     }
 

@@ -71,6 +71,11 @@ public sealed class ChatClient : IAsyncDisposable
     public AccountKind Account { get; private set; } = AccountKind.User;
     public ulong? ActiveChannelId { get; private set; }
 
+    int _historyGeneration;
+
+    /// <summary>Bumped whenever cached history is thrown away (a session that couldn't be resumed); views reload.</summary>
+    public int HistoryGeneration => Volatile.Read(ref _historyGeneration);
+
     sealed class GuildState(GuildInfo info)
     {
         public GuildInfo Info = info;
@@ -133,6 +138,12 @@ public sealed class ChatClient : IAsyncDisposable
     }
 
     public ValueTask DisposeAsync() => new(DisconnectAsync());
+
+    /// <summary>Hosts call this when the OS reports connectivity again (MAUI: Connectivity.ConnectivityChanged).</summary>
+    public void NotifyNetworkAvailable()
+    {
+        if (State is ConnectionState.Reconnecting or ConnectionState.Connecting) _connection?.NetworkAvailable();
+    }
 
     void SetState(ConnectionState state, string? detail)
     {
@@ -382,11 +393,13 @@ public sealed class ChatClient : IAsyncDisposable
         else await Rest.AddReactionAsync(message.ChannelId, message.Id, emoji, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Call on keystrokes in the composer; sends the typing indicator at most every 8 seconds (bot mode only).</summary>
+    /// <summary>Call on keystrokes in the composer; sends the typing indicator at most every 8 seconds (not when posting through a webhook).</summary>
     public async Task NotifyTypingAsync(ulong channelId)
     {
         var s = _settings.Current;
-        if (!s.SendTypingIndicator || s.SendMode != SendMode.Bot || _connection is null) return;
+        // DMs always send as the account (no webhooks there), so they show typing whatever the send mode.
+        bool direct = s.SendMode == SendMode.Bot || GetChannel(channelId)?.IsPrivate == true;
+        if (!s.SendTypingIndicator || !direct || _connection is null) return;
         var now = _time.GetUtcNow();
         lock (_lock)
         {
@@ -421,7 +434,20 @@ public sealed class ChatClient : IAsyncDisposable
                 break;
 
             case ReadyEvent r:
+                // A second READY means the session couldn't be resumed: events in the gap are lost, so cached
+                // history may be missing messages. Drop it; open channels reload their newest page.
+                bool reidentified = CurrentUser is not null;
                 CurrentUser = r.CurrentUser;
+                if (reidentified)
+                {
+                    lock (_lock)
+                    {
+                        _messages.Clear();
+                        _historyLoading.Clear();
+                    }
+                    Interlocked.Increment(ref _historyGeneration);
+                    Raise(new ClientChange(ChangeKind.Messages, null, ActiveChannelId));
+                }
                 SetState(ConnectionState.Connected, null);
                 break;
 

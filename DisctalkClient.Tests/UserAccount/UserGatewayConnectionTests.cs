@@ -49,7 +49,10 @@ public sealed class UserGatewayConnectionTests : IAsyncDisposable
     async Task<FakeTransport> NextTransportAsync()
     {
         using var cts = new CancellationTokenSource(Timeout);
-        return await _created.Reader.ReadAsync(cts.Token);
+        var transport = await _created.Reader.ReadAsync(cts.Token);
+        // The factory hands the transport out before the client has connected it.
+        await transport.Connected.WaitAsync(Timeout);
+        return transport;
     }
 
     async Task<T> WaitForEventAsync<T>(Func<T, bool>? match = null) where T : GatewayEvent
@@ -151,6 +154,24 @@ public sealed class UserGatewayConnectionTests : IAsyncDisposable
 
         lock (_backoffs)
             Assert.Equal([1.5, 2.5, 4.5, 8.5], _backoffs.Take(4).Select(b => b.TotalSeconds));
+    }
+
+    [Fact]
+    public async Task Network_coming_back_skips_the_rest_of_the_backoff()
+    {
+        var t1 = await ReadyAsync();
+        _conn.BackoffDelayOverride = (_, ct) => Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, ct); // a long wait
+
+        t1.Close(1006);
+        await WaitForEventAsync<ConnectionStateChangedEvent>(e => e.State == ConnectionState.Reconnecting);
+        await Task.Delay(50);
+        Assert.False(_created.Reader.TryRead(out _));
+
+        _conn.NetworkAvailable();
+
+        var t2 = await NextTransportAsync();
+        t2.Hello();
+        Assert.Equal(GatewayOpcodes.Resume, (int)(await t2.NextSentAsync())["op"]!);
     }
 
     [Fact]

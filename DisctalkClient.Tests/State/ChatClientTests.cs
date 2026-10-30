@@ -280,6 +280,21 @@ public class ChatClientTests
         Assert.True(_client.IsUnread(50));
     }
 
+    [Fact]
+    public async Task A_fresh_session_drops_cached_history_so_it_reloads()
+    {
+        await LoginAsync();
+        await Conn.RaiseAsync(new MessageCreateEvent(TestData.Message("before the gap")));
+        Assert.NotEmpty(_client.GetMessages(TestData.GeneralId));
+        var generation = _client.HistoryGeneration;
+
+        await Conn.RaiseAsync(new ReadyEvent(TestData.Bot)); // re-identified after an invalid session
+
+        Assert.Empty(_client.GetMessages(TestData.GeneralId));
+        Assert.False(_client.IsHistoryLoaded(TestData.GeneralId));
+        Assert.Equal(generation + 1, _client.HistoryGeneration);
+    }
+
     static async Task WaitUntil(Func<bool> condition)
     {
         for (int i = 0; i < 200 && !condition(); i++) await Task.Delay(10);

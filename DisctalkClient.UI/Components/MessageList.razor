@@ -66,6 +66,7 @@
     DotNetObjectReference<MessageList>? _self;
     IJSObjectReference? _observer;
     ulong _loadedChannel;
+    int _loadedGeneration;
     int _version;
     ClientSettings? _lastSettings;
 
@@ -88,6 +89,7 @@
         if (_loadedChannel != ChannelId)
         {
             _loadedChannel = ChannelId;
+            _loadedGeneration = Client.HistoryGeneration;
             if (_observer is not null) await Js.ScrollToBottomAsync(_scroller);
             await Try(() => Client.EnsureHistoryAsync(ChannelId), "Couldn't load messages");
         }
@@ -105,6 +107,12 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_loadedGeneration != Client.HistoryGeneration && Client.State == ConnectionState.Connected)
+        {
+            // The connection had to start a fresh session and dropped cached history: fetch the newest page again.
+            _loadedGeneration = Client.HistoryGeneration;
+            await Try(() => Client.EnsureHistoryAsync(ChannelId), "Couldn't reload messages");
+        }
         if (Ui.HighlightMessageId is ulong target && Client.GetMessage(ChannelId, target) is not null)
         {
             Ui.ClearHighlight();

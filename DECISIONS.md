@@ -72,3 +72,15 @@ so any of them can be reversed deliberately.
     archiver still builds; no code changes needed.
 17. **Integration test against a real server.** `MySqlArchiveIntegrationTests` creates archiver-shaped tables and
     runs the real SQL. It ran green here against MariaDB; it's skipped unless `DISCTALK_TEST_MYSQL` is set.
+18. **Network comes back → reconnect immediately.** The MAUI app listens to `Connectivity.ConnectivityChanged`. When
+    Internet access returns during a reconnect backoff, the wait is cut short (the 5 s IDENTIFY spacing still
+    applies). Otherwise a phone coming out of a tunnel could sit for up to 60 s.
+19. **A session that couldn't be resumed drops cached history.** After a fresh IDENTIFY (invalid session), events
+    in the gap are gone, so message caches are cleared and the open channel reloads its newest page once. That
+    avoids silently showing a conversation with holes in it.
+20. **CI is the Windows build machine.** WinUI can't build on Linux. `.github/workflows/build.yml` builds the
+    unpackaged Windows app on `windows-latest` and the APK on Ubuntu, and uploads both as run artifacts. The Android
+    head was also built locally here (0 warnings). The workflow needs no secrets.
+21. **Demo mode got DMs, a thread, a forward and a fake archive** so the new UI can be tried without a token
+    (`dotnet run --project DisctalkClient.DevHost --launch-profile Demo`). It was checked in headless Chromium at
+    desktop and phone widths (DMs, thread view, search, jump), with no console errors.

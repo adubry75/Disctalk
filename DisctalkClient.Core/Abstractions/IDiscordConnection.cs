@@ -31,6 +31,9 @@ public interface IDiscordConnection : IAsyncDisposable
     /// Bots receive everything their intents allow and ignore this.
     /// </summary>
     ValueTask FocusChannelAsync(ulong guildId, ulong channelId) => ValueTask.CompletedTask;
+
+    /// <summary>The device's network just came back: skip any reconnect backoff that's in progress.</summary>
+    void NetworkAvailable() { }
 }
 
 public interface IDiscordConnectionFactory

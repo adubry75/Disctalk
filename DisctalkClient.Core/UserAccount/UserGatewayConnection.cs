@@ -37,6 +37,7 @@ public sealed class UserGatewayConnection : IDiscordConnection
     volatile bool _ready;
     (ulong Guild, ulong Channel)? _focus;
     (ulong Guild, ulong Channel)? _sentFocus;
+    CancellationTokenSource? _backoffSkip;
 
     public UserGatewayConnection(string token, HeaderProfile profile, BuildNumberProvider buildNumbers, HttpClient http,
         Func<IGatewayTransport>? transports = null, TimeProvider? time = null, ILogger? logger = null)
@@ -163,8 +164,19 @@ public sealed class UserGatewayConnection : IDiscordConnection
                 : GatewayProtocol.Backoff(failures, Jitter());
             _log.LogInformation("Gateway session ended ({Detail}); {Action} in {Seconds:F1}s", outcome.Detail ?? "closed", outcome.Action, delay.TotalSeconds);
             await EmitAsync(new ConnectionStateChangedEvent(ConnectionState.Reconnecting, outcome.Detail ?? "Connection lost — reconnecting…")).ConfigureAwait(false);
-            try { await BackoffAsync(delay, stop).ConfigureAwait(false); }
-            catch (OperationCanceledException) { break; }
+            try
+            {
+                await ReconnectBackoffAsync(delay, stop).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (OperationCanceledException)
+            {
+                // The network came back: try now, and keep the next backoff short.
+                failures = 0;
+            }
         }
     }
 
@@ -327,6 +339,22 @@ public sealed class UserGatewayConnection : IDiscordConnection
 
     Task BackoffAsync(TimeSpan delay, CancellationToken ct) =>
         BackoffDelayOverride?.Invoke(delay, ct) ?? Task.Delay(delay, _time, ct);
+
+    /// <summary>A reconnect wait that <see cref="NetworkAvailable"/> can cut short. (The IDENTIFY spacing wait can't be skipped.)</summary>
+    async Task ReconnectBackoffAsync(TimeSpan delay, CancellationToken stop)
+    {
+        using var skip = new CancellationTokenSource();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop, skip.Token);
+        Volatile.Write(ref _backoffSkip, skip);
+        try { await BackoffAsync(delay, linked.Token).ConfigureAwait(false); }
+        finally { Volatile.Write(ref _backoffSkip, null); }
+    }
+
+    public void NetworkAvailable()
+    {
+        try { Volatile.Read(ref _backoffSkip)?.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
 
     async ValueTask EmitAsync(GatewayEvent e)
     {
