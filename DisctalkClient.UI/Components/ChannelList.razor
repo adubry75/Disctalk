@@ -7,7 +7,7 @@
             <select class="dt-guild-select" aria-label="Server" value="@GuildId" @onchange="OnGuildChanged">
                 @foreach (var g in Guilds)
                 {
-                    <option value="@g.Id">@g.Name</option>
+                    <option value="@g.Id">@(g.IsDirectMessages ? "✉ Direct Messages" : g.Name)</option>
                 }
             </select>
         }
@@ -103,15 +103,27 @@
     {
         var unread = channel.IsMessageable && Client.IsUnread(channel.Id);
         var selected = channel.Id == Ui.ChannelId;
-        var icon = channel.Kind switch { ChannelKind.Announcement => "announce", ChannelKind.Voice => "voice", ChannelKind.Forum => "forum", _ => "hash" };
-        <button class="dt-channel @(selected ? "selected" : "") @(unread ? "unread" : "") @(channel.IsMessageable ? "" : "disabled")"
+        var icon = channel.Kind switch
+        {
+            ChannelKind.Announcement => "announce", ChannelKind.Voice => "voice", ChannelKind.Forum => "forum",
+            ChannelKind.Thread => "thread", ChannelKind.GroupDirectMessage => "users", ChannelKind.DirectMessage => "at", _ => "hash",
+        };
+        var kindClass = channel.Kind switch { ChannelKind.Thread => "thread", ChannelKind.DirectMessage or ChannelKind.GroupDirectMessage => "dm", _ => "" };
+        <button class="dt-channel @kindClass @(selected ? "selected" : "") @(unread ? "unread" : "") @(channel.IsMessageable ? "" : "disabled")"
                 disabled="@(!channel.IsMessageable)" title="@channel.Topic" @onclick="() => Select(channel)"
                 aria-current="@(selected ? "page" : null)">
             @if (unread)
             {
                 <span class="dt-unread-dot" aria-label="Unread"></span>
             }
-            <Icon Name="@icon" Size="18" Class="dt-channel-icon" />
+            @if (channel.IsPrivate && channel.IconUrl is { } avatar)
+            {
+                <img class="dt-avatar dt-avatar-xs dt-channel-avatar" src="@avatar" alt="" loading="lazy" />
+            }
+            else
+            {
+                <Icon Name="@icon" Size="@(channel.Kind == ChannelKind.Thread ? 14 : 18)" Class="dt-channel-icon" />
+            }
             <span class="dt-channel-name">@channel.Name</span>
         </button>
     };

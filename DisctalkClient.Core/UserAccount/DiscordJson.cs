@@ -210,6 +210,7 @@ public static class DiscordJson
                 Kind = kind,
                 LastMessageId = channel.Id("last_message_id"),
                 IconUrl = icon,
+                RecipientIds = recipients.Select(r => r.Id).ToList(),
             };
         }
 

@@ -5,7 +5,11 @@
         <button class="dt-icon-btn dt-mobile-only" title="Channels" aria-label="Open channels" @onclick="Ui.ToggleChannelDrawer"><Icon Name="menu" /></button>
         @if (Channel is { } channel)
         {
-            <Icon Name="@(channel.Kind == ChannelKind.Announcement ? "announce" : "hash")" Class="dt-chat-header-icon" />
+            <Icon Name="@(channel.Kind switch { ChannelKind.Announcement => "announce", ChannelKind.Thread => "thread", ChannelKind.DirectMessage => "at", ChannelKind.GroupDirectMessage => "users", _ => "hash" })" Class="dt-chat-header-icon" />
+            @if (channel is { Kind: ChannelKind.Thread, ParentId: ulong parentId } && Client.GetChannel(parentId) is { } parent)
+            {
+                <button class="dt-link-btn dt-chat-parent" title="Back to #@parent.Name" @onclick="() => Ui.SelectChannel(parent.GuildId, parent.Id)">#@parent.Name ›</button>
+            }
             <h1 class="dt-chat-title">@channel.Name</h1>
             @if (channel.Topic is { } topic)
             {

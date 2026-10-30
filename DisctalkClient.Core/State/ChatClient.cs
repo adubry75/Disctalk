@@ -257,6 +257,31 @@ public sealed class ChatClient : IAsyncDisposable
             });
     }
 
+    /// <summary>
+    /// The channel for a thread chip under a message. Threads the gateway didn't list (archived, or never joined) are
+    /// added on the fly so they can still be opened and read.
+    /// </summary>
+    public ChannelInfo OpenThread(ThreadRef thread, ulong parentChannelId)
+    {
+        ChannelInfo channel;
+        lock (_lock)
+        {
+            if (_channels.TryGetValue(thread.Id, out var known)) return known;
+            var parent = _channels.GetValueOrDefault(parentChannelId);
+            channel = new ChannelInfo
+            {
+                Id = thread.Id,
+                GuildId = parent?.GuildId ?? 0,
+                Name = thread.Name,
+                Kind = ChannelKind.Thread,
+                ParentId = parentChannelId,
+            };
+            _channels[thread.Id] = channel;
+        }
+        Raise(new ClientChange(ChangeKind.Channels, channel.GuildId, channel.Id));
+        return channel;
+    }
+
     /// <summary>Loads the newest page for a channel the first time it's opened.</summary>
     public async Task EnsureHistoryAsync(ulong channelId, CancellationToken cancellationToken = default)
     {

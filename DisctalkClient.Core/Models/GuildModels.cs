@@ -24,6 +24,8 @@ public sealed record ChannelInfo
     public ulong? LastMessageId { get; init; }
     /// <summary>DMs: the other person's avatar (or the group icon).</summary>
     public string? IconUrl { get; init; }
+    /// <summary>DMs: the other people in the conversation (not you).</summary>
+    public IReadOnlyList<ulong> RecipientIds { get; init; } = [];
 
     /// <summary>Channels the client shows a message pane for.</summary>
     public bool IsMessageable => Kind is ChannelKind.Text or ChannelKind.Announcement or ChannelKind.DirectMessage

@@ -27,7 +27,7 @@
     int _count;
 
     protected override bool Handles(ClientChange change) =>
-        change.Kind is ChangeKind.Members or ChangeKind.Roles or ChangeKind.Guilds && change.GuildId == Ui.GuildId;
+        change.Kind is ChangeKind.Members or ChangeKind.Roles or ChangeKind.Guilds or ChangeKind.Channels && change.GuildId == Ui.GuildId;
 
     protected override void OnParametersSet() => Refresh();
 
@@ -46,6 +46,9 @@
             return;
         }
         var members = Client.GetMembers(guildId);
+        // DMs share one pseudo guild; show only the people in this conversation.
+        if (Ui.ChannelId is ulong channelId && Client.GetChannel(channelId) is { IsPrivate: true } dm)
+            members = members.Where(m => dm.RecipientIds.Contains(m.UserId)).ToList();
         _roles = Client.GetRoles(guildId);
         _groups = MemberGrouping.Group(members, _roles);
         _count = members.Count;

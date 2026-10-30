@@ -40,3 +40,17 @@ so any of them can be reversed deliberately.
 6. **Token check before saving.** User sign-in first calls `GET /users/@me` (the web client does the same at
    startup). A 401 fails the sign-in so a bad token is never stored. A network error there is not fatal; the
    gateway loop retries with backoff.
+7. **DMs live under a "Direct Messages" pseudo guild (id 0)** at the top of the server picker, sorted by latest
+   activity, with the other person's avatar. Their member list shows only that conversation's people. Webhook
+   sending is hidden in DMs (webhooks don't exist there); DMs always send as you.
+8. **Threads are listed under their parent channel** (active threads from READY / THREAD_* events; archived ones drop
+   out like in Discord). A message that started a thread gets a chip; clicking it opens the thread even when the
+   gateway never listed it (archived or not joined), by synthesizing the channel from the message's thread info.
+9. **Read state:** Discord's own markers from READY seed the unread dots (never moving a local marker backwards).
+   The client does **not** send read acks back to Discord, to keep the request count minimal. So channels you read
+   here still show unread in the official app until you open them there. Easy to add later (`POST .../ack`).
+10. **Member list in user mode** comes from op 37 subscriptions (first 100 of the open channel's list) plus the
+    `member` object on every incoming message. There's no full member crawl: that would be a lot of traffic for a
+    user account.
+11. **Timestamps with seconds (backlog #1)** were already done before this session (`h:mm:ss tt` default, setting
+    with presets, all render paths through `TimestampFormatter`). Verified, kept, and re-checked by the tests.

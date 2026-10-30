@@ -1,5 +1,6 @@
 @inject ChatClient Client
 @inject TimestampFormatter Time
+@inject UiState Ui
 
 @if (Message.Kind == ChatMessageKind.System)
 {
@@ -132,8 +133,18 @@ else
         }
     };
 
+    void OpenThread(ThreadRef thread)
+    {
+        var channel = Client.OpenThread(thread, Message.ChannelId);
+        Ui.SelectChannel(channel.GuildId, channel.Id);
+    }
+
     RenderFragment Body() => __builder =>
     {
+        @if (Message.IsForwarded)
+        {
+            <div class="dt-forwarded"><Icon Name="forward" Size="14" /> Forwarded</div>
+        }
         <MarkdownText Text="@Message.Content" GuildId="GuildId" Class="dt-content" />
         @if (Message.IsEdited)
         {
@@ -157,5 +168,15 @@ else
             <EmbedView Embed="e" GuildId="GuildId" />
         }
         <ReactionBar Reactions="Message.Reactions" OnToggle="emoji => OnToggleReaction.InvokeAsync((Message, emoji))" />
+        @if (Message.Thread is { } thread)
+        {
+            <button class="dt-thread-chip" title="Open thread" @onclick="() => OpenThread(thread)" @onclick:stopPropagation="true">
+                <Icon Name="thread" Size="14" /> @thread.Name
+                @if (thread.MessageCount > 0)
+                {
+                    <small>@thread.MessageCount @(thread.MessageCount == 1 ? "message" : "messages")</small>
+                }
+            </button>
+        }
     };
 }

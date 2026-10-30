@@ -43,8 +43,10 @@
 
         <button class="dt-icon-btn" title="Emoji" aria-label="Emoji" @onclick="() => _pickerOpen = !_pickerOpen"><Icon Name="smile" /></button>
 
+        @if (!IsDm)
+        {
         <button class="dt-send-mode @(S.SendMode == SendMode.Webhook ? "webhook" : "bot")" @onclick="ToggleSendMode"
-                title="@(S.SendMode == SendMode.Webhook ? "Sending through the channel webhook. Click to send as the bot." : "Sending as the bot. Click to send through the webhook.")">
+                title="@(S.SendMode == SendMode.Webhook ? $"Sending through the channel webhook. Click to send as {Self}." : $"Sending as {Self}. Click to send through the webhook.")">
             @if (S.SendMode == SendMode.Webhook)
             {
                 @if (!string.IsNullOrEmpty(S.WebhookAvatarUrl))
@@ -59,9 +61,10 @@
             }
             else
             {
-                <Icon Name="bot" Size="16" /><span>Bot</span>
+                <Icon Name="@(IsUser ? "user" : "bot")" Size="16" /><span>@(IsUser ? "Me" : "Bot")</span>
             }
         </button>
+        }
 
         <button class="dt-icon-btn dt-send" title="Send" aria-label="Send" @onclick="SendClicked" disabled="@(!CanSend)"><Icon Name="send" /></button>
 
@@ -93,7 +96,13 @@
     ChatMessage? _editingShown;
 
     string Placeholder => Ui.Editing is not null ? "Edit message"
+        : IsDm ? $"Message @{Client.GetChannel(ChannelId)?.Name}"
         : $"Message #{Client.GetChannel(ChannelId)?.Name}" + (S.SendMode == SendMode.Webhook ? " via webhook" : "");
+
+    bool IsUser => Client.Account == AccountKind.User;
+    string Self => IsUser ? "you" : "the bot";
+    // Webhooks only exist in guild channels: DMs always send as the signed-in account.
+    bool IsDm => Client.GetChannel(ChannelId)?.IsPrivate == true;
 
     bool CanSend => !_sending && Client.State == ConnectionState.Connected && (_text.Trim().Length > 0 || _files.Count > 0);
 
@@ -183,6 +192,7 @@
                     Content = text,
                     ReplyTo = Ui.ReplyingTo,
                     Files = _files.ToList(),
+                    Mode = IsDm ? SendMode.Bot : null,
                 });
                 _files.Clear();
                 Ui.CancelComposerMode();

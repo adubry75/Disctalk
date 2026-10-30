@@ -712,3 +712,17 @@ h3.md-h { font-size: 16px; }
 @media (prefers-reduced-motion: reduce) {
     .dt-app *, .dt-app *::before, .dt-app *::after { animation: none !important; transition: none !important; }
 }
+
+/* Threads sit under their parent channel; DMs show the other person's avatar. */
+.dt-channel.thread { padding-left: 28px; font-size: 14px; }
+.dt-channel.dm { padding-top: 5px; padding-bottom: 5px; }
+.dt-channel-avatar { flex: none; width: 24px; height: 24px; }
+.dt-chat-parent { color: var(--text-muted); white-space: nowrap; }
+
+/* Thread chip under a message that started a thread; "Forwarded" label. */
+.dt-thread-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; padding: 4px 10px; border: 0; border-radius: 6px;
+    background: var(--bg-2); color: var(--text) !important; font-size: 13px; }
+.dt-thread-chip:hover { background: var(--bg-hover); }
+.dt-thread-chip small { color: var(--text-muted); }
+.dt-forwarded { display: flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 12px; font-style: italic; }
+.dt-forwarded + .dt-content, .dt-forwarded ~ .dt-attachments { border-left: 3px solid var(--bg-3); padding-left: 8px; }

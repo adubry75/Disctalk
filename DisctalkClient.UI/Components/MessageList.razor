@@ -12,10 +12,20 @@
             }
             else if (!Client.HasMoreHistory(ChannelId))
             {
+                var channel = Client.GetChannel(ChannelId);
                 <div class="dt-channel-start">
-                    <div class="dt-channel-start-icon"><Icon Name="hash" Size="36" /></div>
-                    <h2>Welcome to #@(Client.GetChannel(ChannelId)?.Name)!</h2>
-                    <p>This is the start of the channel.</p>
+                    @if (channel is { IsPrivate: true })
+                    {
+                        <div class="dt-channel-start-icon"><Icon Name="at" Size="36" /></div>
+                        <h2>@channel.Name</h2>
+                        <p>This is the beginning of your direct message history.</p>
+                    }
+                    else
+                    {
+                        <div class="dt-channel-start-icon"><Icon Name="@(channel?.Kind == ChannelKind.Thread ? "thread" : "hash")" Size="36" /></div>
+                        <h2>Welcome to #@(channel?.Name)!</h2>
+                        <p>This is the start of the @(channel?.Kind == ChannelKind.Thread ? "thread" : "channel").</p>
+                    }
                 </div>
             }
         </div>
