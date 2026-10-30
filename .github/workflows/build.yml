@@ -1,0 +1,78 @@
+# Builds and tests Disctalk Client: unit tests (+ archive SQL against a real MySQL), the Android APK and the
+# Windows app. No secrets are used or needed: nothing here talks to Discord.
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only
+          MYSQL_DATABASE: disctalk_test
+        ports: ["3306:3306"]
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-only" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Client tests (with archive SQL against MySQL)
+        env:
+          DISCTALK_TEST_MYSQL: Server=127.0.0.1;Port=3306;Database=disctalk_test;User ID=root;Password=ci-only
+        run: dotnet test --solution DisctalkClient.NoMaui.slnf
+      - name: Archiver tests
+        run: dotnet test --project Disctalk.Tests
+      - name: Archiver builds
+        run: dotnet build Disctalk/Disctalk.csproj
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: microsoft
+          java-version: "21"
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet workload install maui-android
+      - name: Build and publish the APK
+        run: dotnet publish DisctalkClient/DisctalkClient.csproj -f net10.0-android -c Release -p:AcceptAndroidSDKLicenses=True -o out/android
+      - uses: actions/upload-artifact@v6
+        with:
+          name: DisctalkClient-android
+          path: out/android/*-Signed.apk
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet workload install maui-windows
+      - name: Build and publish (unpackaged)
+        run: dotnet publish DisctalkClient/DisctalkClient.csproj -f net10.0-windows10.0.19041.0 -c Release -p:WindowsPackageType=None -p:RuntimeIdentifierOverride=win-x64 -o out/windows
+      - uses: actions/upload-artifact@v6
+        with:
+          name: DisctalkClient-windows-x64
+          path: out/windows
+          if-no-files-found: error
