@@ -44,7 +44,7 @@
             var m = hit.Message;
             <button class="dt-search-hit" @key="hit.MessageId" @onclick="() => Jump(hit)" title="Jump to this message">
                 <div class="dt-search-hit-meta">
-                    <span class="dt-search-channel">#@(hit.ChannelName ?? Client.GetChannel(hit.ChannelId)?.Name ?? hit.ChannelId.ToString())</span>
+                    <span class="dt-search-channel">@ChannelLabel(hit)</span>
                     <time title="@Time.FormatFull(hit.Timestamp)">@Time.FormatMessageTimestamp(hit.Timestamp)</time>
                 </div>
                 <div class="dt-search-hit-body">
@@ -129,6 +129,10 @@
             _busy = false;
         }
     }
+
+    string ChannelLabel(ArchiveHit hit) => Client.GetChannel(hit.ChannelId) is { IsPrivate: true } dm
+        ? "@" + dm.Name
+        : "#" + (hit.ChannelName ?? Client.GetChannel(hit.ChannelId)?.Name ?? hit.ChannelId.ToString());
 
     string NameOf(ArchiveHit hit) =>
         hit.ServerId is ulong g && Client.GetMember(g, hit.Message.Author.Id) is { } member ? member.DisplayName : hit.Message.Author.DisplayName;

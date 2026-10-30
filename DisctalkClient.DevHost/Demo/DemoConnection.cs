@@ -24,6 +24,7 @@ internal sealed class DemoConnection(DemoHub hub) : IDiscordConnection, IDiscord
         await Task.Delay(300, cancellationToken);
         await Emit(new ReadyEvent(DemoHub.Bot));
         await Emit(new GuildAvailableEvent(hub.Snapshot()));
+        await Emit(new GuildAvailableEvent(hub.DirectMessages()));
         _ = hub.RunActivityAsync(_cts.Token);
     }
 

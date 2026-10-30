@@ -1,4 +1,5 @@
 using DisctalkClient.Core.Abstractions;
+using DisctalkClient.Core.Archive;
 using DisctalkClient.DevHost;
 using DisctalkClient.DevHost.Components;
 using DisctalkClient.DevHost.Demo;
@@ -15,6 +16,10 @@ if (demo)
     builder.Services.AddSingleton<DemoHub>();
     builder.Services.AddSingleton<IDiscordConnectionFactory>(sp => sp.GetRequiredService<DemoHub>());
     builder.Services.AddSingleton<IWebhookExecutor>(sp => sp.GetRequiredService<DemoHub>());
+    builder.Services.AddSingleton<IArchiveDatabase>(sp => sp.GetRequiredService<DemoHub>());
+    var demoSecrets = new InMemorySecretStore();
+    await demoSecrets.SetAsync(ArchiveSearchService.SecretKey, new ArchiveConnection("demo", 3306, "demo", "demo", "").Serialize());
+    builder.Services.AddSingleton<ISecretStore>(demoSecrets);
     builder.Services.AddSingleton<ITokenStore>(new InMemoryTokenStore(AccountKind.User, DemoHub.FakeToken));
     builder.Services.AddSingleton<ISettingsStore, InMemorySettingsStore>();
 }

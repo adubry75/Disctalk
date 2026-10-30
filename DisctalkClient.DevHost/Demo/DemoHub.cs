@@ -1,4 +1,5 @@
 using DisctalkClient.Core.Abstractions;
+using DisctalkClient.Core.Archive;
 using DisctalkClient.Core.Models;
 
 namespace DisctalkClient.DevHost.Demo;
@@ -7,7 +8,7 @@ namespace DisctalkClient.DevHost.Demo;
 /// A fake Discord for running the UI without a bot token: one guild ("Cat Café"), seeded scrollback, simulated
 /// members typing and chatting, and working send/edit/delete/react/webhook paths. Purely in-memory.
 /// </summary>
-public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
+public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor, IArchiveDatabase
 {
     /// <summary>Shaped like a real token so validation passes; it is never sent anywhere.</summary>
     public const string FakeToken = "MTEwMDAwMDAwMDAwMDAwMTAw.DEMO00.demo-token-not-real-demo-token-not-real";
@@ -16,6 +17,7 @@ public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
     public const ulong BotId = 1100000000000000100;
     const ulong WelcomeId = 1100000000000000201, AnnouncementsId = 1100000000000000202, GeneralId = 1100000000000000203,
         CatPicsId = 1100000000000000204, BotTestingId = 1100000000000000205, LoungeId = 1100000000000000206;
+    const ulong LoafThreadId = 1100000000000000207, AdaDmId = 1100000000000000208, GroupDmId = 1100000000000000209;
     const ulong InfoCategory = 1100000000000000301, ChatCategory = 1100000000000000302, VoiceCategory = 1100000000000000303;
     const ulong AdminRole = 1100000000000000401, ModRole = 1100000000000000402, CatLoverRole = 1100000000000000403;
 
@@ -68,6 +70,7 @@ public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
             new() { Id = CatPicsId, GuildId = GuildId, Name = "cat-pics", ParentId = ChatCategory, Position = 1, Topic = "Pictures of cats. Only cats. Okay, maybe a dog.", LastMessageId = LastId(CatPicsId) },
             new() { Id = BotTestingId, GuildId = GuildId, Name = "bot-testing", ParentId = ChatCategory, Position = 2, LastMessageId = LastId(BotTestingId) },
             new() { Id = LoungeId, GuildId = GuildId, Name = "Lounge", Kind = ChannelKind.Voice, ParentId = VoiceCategory, Position = 0 },
+            new() { Id = LoafThreadId, GuildId = GuildId, Name = "loaf appreciation", Kind = ChannelKind.Thread, ParentId = CatPicsId, LastMessageId = LastId(LoafThreadId) },
         ],
         [
             new() { Id = GuildId, GuildId = GuildId, Name = "@everyone", Position = 0 },
@@ -77,6 +80,46 @@ public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
         ],
         Members,
         [new GuildEmojiInfo(1100000000000000501, GuildId, "blobcat", false), new GuildEmojiInfo(1100000000000000502, GuildId, "catjam", true)]);
+
+    /// <summary>Direct messages (user-account mode): a DM with Ada and a small group DM.</summary>
+    internal GuildSnapshot DirectMessages()
+    {
+        var ada = Members[0];
+        var mochi = Members[1];
+        var dms = new List<MemberInfo> { ada with { GuildId = 0, RoleIds = [] }, mochi with { GuildId = 0, RoleIds = [] } };
+        return new GuildSnapshot(GuildInfo.DirectMessages,
+        [
+            new() { Id = AdaDmId, GuildId = 0, Name = "Ada", Kind = ChannelKind.DirectMessage, IconUrl = ada.AvatarUrl, LastMessageId = LastId(AdaDmId), RecipientIds = [ada.UserId] },
+            new() { Id = GroupDmId, GuildId = 0, Name = "Ada, Mochi", Kind = ChannelKind.GroupDirectMessage, LastMessageId = LastId(GroupDmId), RecipientIds = [ada.UserId, mochi.UserId] },
+        ],
+        [], dms, []);
+    }
+
+    // ------------------------------------------------------------------ demo archive (search)
+
+    /// <summary>
+    /// Stands in for the archiver's MySQL: answers with demo messages whose content contains every LIKE term of the
+    /// built query. Good enough to try the search UI; the real SQL is covered by the integration test.
+    /// </summary>
+    public Task<IReadOnlyList<ArchiveRow>> QueryAsync(ArchiveConnection connection, SqlCommandText command, CancellationToken cancellationToken)
+    {
+        var terms = command.Parameters.Select(p => p.Value).OfType<string>().Where(v => v.StartsWith('%') && v.EndsWith('%'))
+            .Select(v => v.Trim('%').Replace(@"\%", "%").Replace(@"\_", "_").Replace(@"\\", @"\")).ToList();
+        var limit = int.Parse(command.Sql[(command.Sql.LastIndexOf("LIMIT ", StringComparison.Ordinal) + 6)..]);
+        var cursor = command.Sql.Contains("m.messageId < ") ? command.Parameters[^1].Value as ulong? : null;
+        lock (_lock)
+        {
+            IReadOnlyList<ArchiveRow> rows = _messages.Values.SelectMany(l => l.Values)
+                .Where(m => terms.All(t => m.Content.Contains(t, StringComparison.OrdinalIgnoreCase)) && (cursor is null || m.Id < cursor))
+                .OrderByDescending(m => m.Id).Take(limit)
+                .Select(m => new ArchiveRow(m.Id, m.ChannelId, m.Author.Id, m.Author.Username, m.Content, null,
+                    Snapshot().Channels.FirstOrDefault(c => c.Id == m.ChannelId)?.Name, m.ChannelId is AdaDmId or GroupDmId ? null : GuildId))
+                .ToList();
+            return Task.FromResult(rows);
+        }
+    }
+
+    public Task TestAsync(ArchiveConnection connection, CancellationToken cancellationToken) => Task.CompletedTask;
 
     ulong? LastId(ulong channelId)
     {
@@ -273,7 +316,11 @@ public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
         [
             new AttachmentInfo { Id = 1100000000000000601, FileName = "loaf.svg", Url = "demo/cat-loaf.svg", ContentType = "image/svg+xml", Width = 480, Height = 320, Size = 2048 },
         ], at: t.AddMinutes(3));
-        Replace(WithReaction(WithReaction(pic, new EmojiRef(null, "😻"), false, 4), new EmojiRef(1100000000000000501, "blobcat"), true, 2));
+        Replace(WithReaction(WithReaction(pic, new EmojiRef(null, "😻"), false, 4), new EmojiRef(1100000000000000501, "blobcat"), true, 2)
+            with { Thread = new ThreadRef(LoafThreadId, "loaf appreciation", 2) });
+        Post(LoafThreadId, m["Biscuit"], "the paws are fully tucked. 10/10 loaf", at: t.AddMinutes(4));
+        Post(LoafThreadId, m["Mochi"], "certified bread", at: t.AddMinutes(6));
+        Replace(Post(GeneralId, m["Pepper"], "behold, the loaf", at: t.AddMinutes(7)) with { IsForwarded = true });
         Post(GeneralId, m["Clover"], "found a cool article https://en.wikipedia.org/wiki/Cat", embeds:
         [
             new EmbedInfo
@@ -288,6 +335,10 @@ public sealed class DemoHub : IDiscordConnectionFactory, IWebhookExecutor
         Replace(edited with { EditedAt = t.AddMinutes(9) });
         Replace(WithReaction(Post(GeneralId, m["Ziggy"], "lol 😹😹", at: t.AddMinutes(10)), new EmojiRef(null, "😹"), false, 3));
         Post(GeneralId, m["Ada"], "<:blobcat:1100000000000000501>", at: t.AddMinutes(11));
+
+        Post(AdaDmId, m["Ada"], "hey! did you see the loaf thread? 🍞", at: now.AddMinutes(-30));
+        Post(AdaDmId, Bot, "yes, peak loaf", at: now.AddMinutes(-29));
+        Post(GroupDmId, m["Mochi"], "snack duty swap this week?", at: now.AddHours(-5));
 
         Post(BotTestingId, Bot, "Bot online. Try sending a message, reacting, or switching the send mode to **Webhook** in the composer.", at: now.AddMinutes(-5));
     }
